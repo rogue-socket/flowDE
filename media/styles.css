@@ -52,6 +52,11 @@ body {
   font-weight: 600;
 }
 
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .toolbar-actions button:hover {
   background: #3b6340;
 }

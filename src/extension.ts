@@ -209,6 +209,7 @@ class FlowDEPanel implements vscode.Disposable {
           <p id="subtitle">Graph-first code comprehension</p>
         </div>
         <div class="toolbar-actions">
+          <button id="layout-btn" type="button">Layout: Clustered</button>
           <button id="refresh-btn" type="button">Refresh</button>
         </div>
       </header>
