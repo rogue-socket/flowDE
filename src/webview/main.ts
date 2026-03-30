@@ -53,8 +53,16 @@ interface Point {
   y: number;
 }
 
+interface MinimapTransform {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+}
+
 const vscode = acquireVsCodeApi();
 const graphContainer = getRequiredElement<HTMLElement>('#graph-canvas');
+const minimapCanvas = getRequiredElement<HTMLCanvasElement>('#minimap-canvas');
+const minimapContext = getRequiredCanvasContext(minimapCanvas);
 const statusText = getRequiredElement<HTMLElement>('#status');
 const layoutButton = getRequiredElement<HTMLButtonElement>('#layout-btn');
 const fitButton = getRequiredElement<HTMLButtonElement>('#fit-btn');
@@ -65,6 +73,8 @@ const refreshButton = getRequiredElement<HTMLButtonElement>('#refresh-btn');
 let currentLayoutMode: LayoutMode = 'clustered';
 let latestGraphData: GraphData | undefined;
 let hasInitializedViewport = false;
+let minimapUpdateRequested = false;
+let minimapTransform: MinimapTransform | undefined;
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2.4;
@@ -217,6 +227,31 @@ zoomResetButton.addEventListener('click', () => {
 
 graph.on('zoom', () => {
   updateZoomResetLabel();
+  scheduleMinimapRender();
+});
+
+graph.on('pan', () => {
+  scheduleMinimapRender();
+});
+
+window.addEventListener('resize', () => {
+  graph.resize();
+  updateZoomResetLabel();
+  scheduleMinimapRender();
+});
+
+minimapCanvas.addEventListener('pointerdown', (event: PointerEvent) => {
+  if (!minimapTransform) {
+    return;
+  }
+
+  const rect = minimapCanvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const modelX = (x - minimapTransform.offsetX) / minimapTransform.scale;
+  const modelY = (y - minimapTransform.offsetY) / minimapTransform.scale;
+
+  centerGraphAtModelPoint(modelX, modelY);
 });
 
 window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
@@ -235,6 +270,7 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
 });
 
 updateZoomResetLabel();
+scheduleMinimapRender();
 vscode.postMessage({ type: 'ready' });
 
 function renderGraph(graphData: GraphData): void {
@@ -296,14 +332,14 @@ function applyLayout(graphData: GraphData, shouldFit: boolean): void {
     return;
   }
 
-  graph.layout({
+  runLayout({
     name: 'cose',
     animate: false,
     nodeRepulsion: 240000,
     idealEdgeLength: 100,
     fit: shouldFit,
     padding: 40
-  }).run();
+  });
 }
 
 function applyClusteredLayout(graphData: GraphData, shouldFit: boolean): void {
@@ -313,13 +349,13 @@ function applyClusteredLayout(graphData: GraphData, shouldFit: boolean): void {
     positionMap[id] = point;
   }
 
-  graph.layout({
+  runLayout({
     name: 'preset',
     positions: positionMap,
     animate: false,
     fit: shouldFit,
     padding: 70
-  }).run();
+  });
 }
 
 function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
@@ -511,6 +547,124 @@ function updateZoomResetLabel(): void {
   zoomResetButton.textContent = `${Math.round(graph.zoom() * 100)}%`;
 }
 
+function runLayout(options: cytoscape.LayoutOptions): void {
+  const layout = graph.layout(options);
+  graph.one('layoutstop', () => {
+    scheduleMinimapRender();
+    updateZoomResetLabel();
+  });
+  layout.run();
+}
+
+function centerGraphAtModelPoint(modelX: number, modelY: number): void {
+  const zoom = graph.zoom();
+  graph.pan({
+    x: graph.width() / 2 - modelX * zoom,
+    y: graph.height() / 2 - modelY * zoom
+  });
+  scheduleMinimapRender();
+}
+
+function scheduleMinimapRender(): void {
+  if (minimapUpdateRequested) {
+    return;
+  }
+
+  minimapUpdateRequested = true;
+  requestAnimationFrame(() => {
+    minimapUpdateRequested = false;
+    renderMinimap();
+  });
+}
+
+function renderMinimap(): void {
+  const cssWidth = minimapCanvas.clientWidth;
+  const cssHeight = minimapCanvas.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  const pixelWidth = Math.max(1, Math.floor(cssWidth * dpr));
+  const pixelHeight = Math.max(1, Math.floor(cssHeight * dpr));
+
+  if (minimapCanvas.width !== pixelWidth || minimapCanvas.height !== pixelHeight) {
+    minimapCanvas.width = pixelWidth;
+    minimapCanvas.height = pixelHeight;
+  }
+
+  minimapContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+  minimapContext.clearRect(0, 0, cssWidth, cssHeight);
+
+  const bounds = graph.elements().boundingBox();
+  if (!Number.isFinite(bounds.w) || !Number.isFinite(bounds.h) || graph.nodes().length === 0) {
+    minimapTransform = undefined;
+    return;
+  }
+
+  const modelPadding = 30;
+  const x1 = bounds.x1 - modelPadding;
+  const y1 = bounds.y1 - modelPadding;
+  const modelWidth = Math.max(bounds.w + modelPadding * 2, 1);
+  const modelHeight = Math.max(bounds.h + modelPadding * 2, 1);
+  const innerPadding = 6;
+  const scale = Math.min(
+    (cssWidth - innerPadding * 2) / modelWidth,
+    (cssHeight - innerPadding * 2) / modelHeight
+  );
+  const offsetX = (cssWidth - modelWidth * scale) / 2 - x1 * scale;
+  const offsetY = (cssHeight - modelHeight * scale) / 2 - y1 * scale;
+
+  minimapTransform = { scale, offsetX, offsetY };
+
+  drawMinimapNodes(scale, offsetX, offsetY);
+  drawMinimapViewport(scale, offsetX, offsetY);
+}
+
+function drawMinimapNodes(scale: number, offsetX: number, offsetY: number): void {
+  for (const node of graph.nodes()) {
+    const position = node.position();
+    const x = position.x * scale + offsetX;
+    const y = position.y * scale + offsetY;
+    const type = String(node.data('type'));
+    const isExternal = Number(node.data('external')) === 1;
+
+    const color = isExternal
+      ? '#6c757d'
+      : type === 'module'
+        ? '#1b4332'
+        : '#4f772d';
+    const radius = type === 'module' ? 2.4 : 1.8;
+
+    minimapContext.beginPath();
+    minimapContext.fillStyle = color;
+    minimapContext.arc(x, y, radius, 0, Math.PI * 2);
+    minimapContext.fill();
+  }
+}
+
+function drawMinimapViewport(scale: number, offsetX: number, offsetY: number): void {
+  const viewport = getVisibleModelBounds();
+  const x = viewport.x1 * scale + offsetX;
+  const y = viewport.y1 * scale + offsetY;
+  const width = Math.max((viewport.x2 - viewport.x1) * scale, 1);
+  const height = Math.max((viewport.y2 - viewport.y1) * scale, 1);
+
+  minimapContext.fillStyle = 'rgba(111, 255, 233, 0.11)';
+  minimapContext.strokeStyle = 'rgba(111, 255, 233, 0.75)';
+  minimapContext.lineWidth = 1;
+  minimapContext.fillRect(x, y, width, height);
+  minimapContext.strokeRect(x, y, width, height);
+}
+
+function getVisibleModelBounds(): { x1: number; y1: number; x2: number; y2: number } {
+  const pan = graph.pan();
+  const zoom = graph.zoom();
+
+  return {
+    x1: -pan.x / zoom,
+    y1: -pan.y / zoom,
+    x2: (graph.width() - pan.x) / zoom,
+    y2: (graph.height() - pan.y) / zoom
+  };
+}
+
 function getRequiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
   if (!element) {
@@ -518,4 +672,13 @@ function getRequiredElement<T extends Element>(selector: string): T {
   }
 
   return element;
+}
+
+function getRequiredCanvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('FlowDE webview failed to initialize minimap canvas context.');
+  }
+
+  return context;
 }

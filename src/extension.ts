@@ -222,6 +222,10 @@ class FlowDEPanel implements vscode.Disposable {
       </section>
       <main class="graph-stage">
         <div id="graph-canvas" aria-label="FlowDE graph"></div>
+        <aside class="minimap" aria-label="Graph overview">
+          <div class="minimap-title">Overview</div>
+          <canvas id="minimap-canvas" width="220" height="140"></canvas>
+        </aside>
         <div class="legend-inline" aria-label="Graph legend">
           <span class="legend-item"><span class="legend-dot module"></span>Module</span>
           <span class="legend-item"><span class="legend-dot function"></span>Function</span>
