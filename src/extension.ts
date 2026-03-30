@@ -226,10 +226,47 @@ class FlowDEPanel implements vscode.Disposable {
             <h2>Flows</h2>
             <span id="flow-meta">0 discovered</span>
           </div>
+          <div class="flow-controls" aria-label="Flow controls">
+            <label class="flow-control">
+              <span>Min steps</span>
+              <select id="flow-min-length">
+                <option value="1">1+</option>
+                <option value="2" selected>2+</option>
+                <option value="3">3+</option>
+                <option value="4">4+</option>
+                <option value="5">5+</option>
+              </select>
+            </label>
+            <label class="flow-control">
+              <span>Min confidence</span>
+              <div class="flow-slider-row">
+                <input id="flow-confidence" type="range" min="0" max="100" step="5" value="0" />
+                <span id="flow-confidence-value">0%</span>
+              </div>
+            </label>
+            <label class="flow-control">
+              <span>Module</span>
+              <select id="flow-module">
+                <option value="all">All modules</option>
+              </select>
+            </label>
+            <button id="flow-clear-btn" type="button">Clear highlight</button>
+          </div>
           <ul id="flow-list" class="flow-list"></ul>
           <div class="flow-steps-panel">
-            <h3>Flow Steps</h3>
+            <div class="flow-steps-header">
+              <h3>Flow Steps</h3>
+              <div class="flow-playback" aria-label="Flow playback controls">
+                <button id="flow-prev-btn" type="button" aria-label="Previous step">Prev</button>
+                <button id="flow-play-btn" type="button" aria-label="Play flow">Play</button>
+                <button id="flow-next-btn" type="button" aria-label="Next step">Next</button>
+              </div>
+            </div>
             <ol id="flow-steps" class="flow-steps"></ol>
+            <div class="flow-explain-panel">
+              <h3>Explain</h3>
+              <div id="flow-explain" class="flow-explain"></div>
+            </div>
           </div>
         </aside>
         <section class="graph-stage">

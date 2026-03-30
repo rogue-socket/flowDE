@@ -21,6 +21,11 @@ interface GraphEdge {
   source: string;
   target: string;
   type: GraphEdgeType;
+  metadata?: {
+    confidence?: number;
+    provenance?: string;
+    reason?: string;
+  };
 }
 
 interface GraphData {
@@ -60,6 +65,12 @@ interface FlowDefinition {
   edgeIds: string[];
 }
 
+interface FlowFilters {
+  minSteps: number;
+  minConfidence: number;
+  moduleId: string;
+}
+
 interface MinimapTransform {
   scale: number;
   offsetX: number;
@@ -72,8 +83,17 @@ const minimapCanvas = getRequiredElement<HTMLCanvasElement>('#minimap-canvas');
 const minimapContext = getRequiredCanvasContext(minimapCanvas);
 const statusText = getRequiredElement<HTMLElement>('#status');
 const flowMeta = getRequiredElement<HTMLElement>('#flow-meta');
+const flowMinLength = getRequiredElement<HTMLSelectElement>('#flow-min-length');
+const flowConfidence = getRequiredElement<HTMLInputElement>('#flow-confidence');
+const flowConfidenceValue = getRequiredElement<HTMLElement>('#flow-confidence-value');
+const flowModule = getRequiredElement<HTMLSelectElement>('#flow-module');
+const flowClearButton = getRequiredElement<HTMLButtonElement>('#flow-clear-btn');
 const flowList = getRequiredElement<HTMLUListElement>('#flow-list');
 const flowSteps = getRequiredElement<HTMLOListElement>('#flow-steps');
+const flowPrevButton = getRequiredElement<HTMLButtonElement>('#flow-prev-btn');
+const flowPlayButton = getRequiredElement<HTMLButtonElement>('#flow-play-btn');
+const flowNextButton = getRequiredElement<HTMLButtonElement>('#flow-next-btn');
+const flowExplain = getRequiredElement<HTMLElement>('#flow-explain');
 const layoutButton = getRequiredElement<HTMLButtonElement>('#layout-btn');
 const fitButton = getRequiredElement<HTMLButtonElement>('#fit-btn');
 const zoomOutButton = getRequiredElement<HTMLButtonElement>('#zoom-out-btn');
@@ -88,8 +108,17 @@ let minimapTransform: MinimapTransform | undefined;
 let flowDefinitions: FlowDefinition[] = [];
 let selectedFlowId: string | undefined;
 let selectedStepIndex: number | undefined;
+let playbackTimer: number | undefined;
+let isPlaybackRunning = false;
 const nodeCatalog = new Map<string, GraphNode>();
 const callEdgeByPair = new Map<string, string>();
+const edgeCatalog = new Map<string, GraphEdge>();
+
+const flowFilters: FlowFilters = {
+  minSteps: Number.parseInt(flowMinLength.value, 10) || 2,
+  minConfidence: Number.parseInt(flowConfidence.value, 10) / 100 || 0,
+  moduleId: 'all'
+};
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2.4;
@@ -198,6 +227,15 @@ const graph = cytoscape({
       }
     },
     {
+      selector: 'edge.flow-current-edge',
+      style: {
+        width: 3.3,
+        opacity: 1,
+        'line-color': '#ffd166',
+        'target-arrow-color': '#ffd166'
+      }
+    },
+    {
       selector: 'edge[type = "call"]',
       style: {
         'line-color': '#f4a261',
@@ -300,6 +338,7 @@ flowList.addEventListener('click', (event) => {
     return;
   }
 
+  stopPlayback();
   selectedFlowId = nextFlowId;
   selectedStepIndex = 0;
   renderFlowSidebar();
@@ -337,6 +376,57 @@ flowSteps.addEventListener('click', (event) => {
   renderFlowSteps(activeFlow);
   applyFlowHighlighting();
   focusNode(activeFlow.nodeIds[stepIndex], true);
+});
+
+flowMinLength.addEventListener('change', () => {
+  flowFilters.minSteps = Number.parseInt(flowMinLength.value, 10) || 1;
+  applyFlowFilters();
+});
+
+flowConfidence.addEventListener('input', () => {
+  const value = Number.parseInt(flowConfidence.value, 10);
+  flowFilters.minConfidence = Number.isFinite(value) ? value / 100 : 0;
+  flowConfidenceValue.textContent = `${Math.round(flowFilters.minConfidence * 100)}%`;
+  applyFlowFilters();
+});
+
+flowModule.addEventListener('change', () => {
+  flowFilters.moduleId = flowModule.value;
+  applyFlowFilters();
+});
+
+flowClearButton.addEventListener('click', () => {
+  stopPlayback();
+  selectedFlowId = undefined;
+  selectedStepIndex = undefined;
+  renderFlowSidebar();
+  applyFlowHighlighting();
+});
+
+flowPrevButton.addEventListener('click', () => {
+  const flow = getSelectedFlow();
+  if (!flow || flow.nodeIds.length === 0) {
+    return;
+  }
+
+  const currentIndex = typeof selectedStepIndex === 'number' ? selectedStepIndex : 0;
+  selectedStepIndex = Math.max(currentIndex - 1, 0);
+  renderFlowSteps(flow);
+  applyFlowHighlighting();
+  focusNode(flow.nodeIds[selectedStepIndex], true);
+});
+
+flowNextButton.addEventListener('click', () => {
+  advanceStep();
+});
+
+flowPlayButton.addEventListener('click', () => {
+  if (isPlaybackRunning) {
+    stopPlayback();
+    return;
+  }
+
+  startPlayback();
 });
 
 graph.on('zoom', () => {
@@ -384,6 +474,7 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
 });
 
 updateZoomResetLabel();
+flowConfidenceValue.textContent = `${Math.round(flowFilters.minConfidence * 100)}%`;
 scheduleMinimapRender();
 vscode.postMessage({ type: 'ready' });
 
@@ -391,12 +482,15 @@ function renderGraph(graphData: GraphData): void {
   latestGraphData = graphData;
   nodeCatalog.clear();
   callEdgeByPair.clear();
+  edgeCatalog.clear();
 
   for (const node of graphData.nodes) {
     nodeCatalog.set(node.id, node);
   }
 
   for (const edge of graphData.edges) {
+    edgeCatalog.set(edge.id, edge);
+
     if (edge.type !== 'call') {
       continue;
     }
@@ -404,13 +498,7 @@ function renderGraph(graphData: GraphData): void {
     callEdgeByPair.set(flowPairKey(edge.source, edge.target), edge.id);
   }
 
-  flowDefinitions = buildFlowDefinitions(graphData);
-  if (selectedFlowId && !flowDefinitions.some((flow) => flow.id === selectedFlowId)) {
-    selectedFlowId = undefined;
-    selectedStepIndex = undefined;
-  }
-
-  renderFlowSidebar();
+  syncModuleFilterOptions(graphData);
 
   const elements = [
     ...graphData.nodes.map((node) => ({
@@ -435,6 +523,8 @@ function renderGraph(graphData: GraphData): void {
 
   graph.elements().remove();
   graph.add(elements);
+
+  applyFlowFilters();
 
   const shouldFit = !hasInitializedViewport;
   applyLayout(graphData, shouldFit);
@@ -470,6 +560,7 @@ function renderFlowSidebar(): void {
     placeholder.textContent = 'No callable flow patterns detected yet.';
     flowList.appendChild(placeholder);
     renderFlowSteps(undefined);
+    updatePlaybackControls();
     return;
   }
 
@@ -488,6 +579,7 @@ function renderFlowSidebar(): void {
   }
 
   renderFlowSteps(getSelectedFlow());
+  updatePlaybackControls();
 }
 
 function renderFlowSteps(flow: FlowDefinition | undefined): void {
@@ -498,6 +590,7 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
     placeholder.className = 'flow-placeholder';
     placeholder.textContent = 'Select a flow to highlight the involved blocks.';
     flowSteps.appendChild(placeholder);
+    renderExplainPanel(undefined);
     return;
   }
 
@@ -527,13 +620,17 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
     item.appendChild(button);
     flowSteps.appendChild(item);
   });
+
+  renderExplainPanel(flow);
 }
 
 function applyFlowHighlighting(): void {
-  graph.elements().removeClass('dimmed flow-node flow-edge flow-current');
+  graph.elements().removeClass('dimmed flow-node flow-edge flow-current flow-current-edge');
 
   const activeFlow = getSelectedFlow();
   if (!activeFlow) {
+    renderExplainPanel(undefined);
+    updatePlaybackControls();
     scheduleMinimapRender();
     return;
   }
@@ -566,8 +663,17 @@ function applyFlowHighlighting(): void {
   ) {
     const currentNodeId = activeFlow.nodeIds[selectedStepIndex];
     graph.getElementById(currentNodeId).addClass('flow-current');
+
+    if (selectedStepIndex > 0) {
+      const currentEdgeId = activeFlow.edgeIds[selectedStepIndex - 1];
+      if (currentEdgeId) {
+        graph.getElementById(currentEdgeId).addClass('flow-current-edge');
+      }
+    }
   }
 
+  renderExplainPanel(activeFlow);
+  updatePlaybackControls();
   scheduleMinimapRender();
 }
 
@@ -603,7 +709,7 @@ function focusNode(nodeId: string, animate: boolean): void {
   graph.center(element);
 }
 
-function buildFlowDefinitions(graphData: GraphData): FlowDefinition[] {
+function buildFlowDefinitions(graphData: GraphData, filters: FlowFilters): FlowDefinition[] {
   const functionNodes = graphData.nodes.filter((node) => node.type === 'function');
   if (functionNodes.length === 0) {
     return [];
@@ -620,11 +726,11 @@ function buildFlowDefinitions(graphData: GraphData): FlowDefinition[] {
     outdegree.set(functionNode.id, 0);
   }
 
-  for (const edge of graphData.edges) {
-    if (edge.type !== 'call') {
-      continue;
-    }
+  const callEdges = graphData.edges.filter(
+    (edge) => edge.type === 'call' && getEdgeConfidence(edge) >= filters.minConfidence
+  );
 
+  for (const edge of callEdges) {
     if (!functionIds.has(edge.source) || !functionIds.has(edge.target)) {
       continue;
     }
@@ -723,12 +829,186 @@ function buildFlowDefinitions(graphData: GraphData): FlowDefinition[] {
         edgeIds
       };
     })
+    .filter((flow) => flow.nodeIds.length >= filters.minSteps)
+    .filter((flow) => {
+      if (filters.moduleId === 'all') {
+        return true;
+      }
+
+      return flow.nodeIds.some((nodeId) => {
+        const node = nodeCatalog.get(nodeId);
+        if (!node) {
+          return false;
+        }
+
+        return getModuleNodeId(node) === filters.moduleId;
+      });
+    })
     .sort((a, b) => b.nodeIds.length - a.nodeIds.length)
     .slice(0, 40);
 }
 
 function flowPairKey(sourceId: string, targetId: string): string {
   return `${sourceId}=>${targetId}`;
+}
+
+function applyFlowFilters(): void {
+  if (!latestGraphData) {
+    flowDefinitions = [];
+    selectedFlowId = undefined;
+    selectedStepIndex = undefined;
+    renderFlowSidebar();
+    applyFlowHighlighting();
+    return;
+  }
+
+  stopPlayback();
+  flowDefinitions = buildFlowDefinitions(latestGraphData, flowFilters);
+
+  if (selectedFlowId && !flowDefinitions.some((flow) => flow.id === selectedFlowId)) {
+    selectedFlowId = undefined;
+    selectedStepIndex = undefined;
+  }
+
+  renderFlowSidebar();
+  applyFlowHighlighting();
+}
+
+function syncModuleFilterOptions(graphData: GraphData): void {
+  const previousValue = flowModule.value || flowFilters.moduleId;
+  const options = [{ value: 'all', label: 'All modules' }];
+
+  graphData.nodes
+    .filter((node) => node.type === 'module' && !node.metadata?.external)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .forEach((moduleNode) => {
+      options.push({ value: moduleNode.id, label: moduleNode.name });
+    });
+
+  flowModule.replaceChildren();
+  options.forEach((optionData) => {
+    const option = document.createElement('option');
+    option.value = optionData.value;
+    option.textContent = optionData.label;
+    flowModule.appendChild(option);
+  });
+
+  const resolvedValue = options.some((option) => option.value === previousValue) ? previousValue : 'all';
+  flowModule.value = resolvedValue;
+  flowFilters.moduleId = resolvedValue;
+}
+
+function startPlayback(): void {
+  const flow = getSelectedFlow();
+  if (!flow || flow.nodeIds.length === 0) {
+    return;
+  }
+
+  if (typeof selectedStepIndex !== 'number') {
+    selectedStepIndex = 0;
+  }
+
+  isPlaybackRunning = true;
+  flowPlayButton.textContent = 'Pause';
+  playbackTimer = window.setInterval(() => {
+    const advanced = advanceStep();
+    if (!advanced) {
+      stopPlayback();
+    }
+  }, 760);
+
+  updatePlaybackControls();
+}
+
+function stopPlayback(): void {
+  if (playbackTimer) {
+    clearInterval(playbackTimer);
+    playbackTimer = undefined;
+  }
+
+  isPlaybackRunning = false;
+  flowPlayButton.textContent = 'Play';
+  updatePlaybackControls();
+}
+
+function advanceStep(): boolean {
+  const flow = getSelectedFlow();
+  if (!flow || flow.nodeIds.length === 0) {
+    return false;
+  }
+
+  const currentIndex = typeof selectedStepIndex === 'number' ? selectedStepIndex : 0;
+  if (currentIndex >= flow.nodeIds.length - 1) {
+    return false;
+  }
+
+  selectedStepIndex = currentIndex + 1;
+  renderFlowSteps(flow);
+  applyFlowHighlighting();
+  focusNode(flow.nodeIds[selectedStepIndex], true);
+  return true;
+}
+
+function updatePlaybackControls(): void {
+  const flow = getSelectedFlow();
+  const hasFlow = Boolean(flow && flow.nodeIds.length > 0);
+  const currentIndex = typeof selectedStepIndex === 'number' ? selectedStepIndex : 0;
+
+  flowPrevButton.disabled = !hasFlow || currentIndex <= 0;
+  flowNextButton.disabled = !hasFlow || !flow || currentIndex >= flow.nodeIds.length - 1;
+  flowPlayButton.disabled = !hasFlow;
+}
+
+function renderExplainPanel(flow: FlowDefinition | undefined): void {
+  if (!flow || typeof selectedStepIndex !== 'number' || selectedStepIndex < 0) {
+    flowExplain.textContent = 'Select a flow step to inspect confidence and reasoning.';
+    return;
+  }
+
+  const nodeId = flow.nodeIds[selectedStepIndex];
+  const node = nodeCatalog.get(nodeId);
+  const moduleNodeId = node ? getModuleNodeId(node) : undefined;
+  const moduleNode = moduleNodeId ? nodeCatalog.get(moduleNodeId) : undefined;
+  const incomingEdgeId = selectedStepIndex > 0 ? flow.edgeIds[selectedStepIndex - 1] : undefined;
+  const incomingEdge = incomingEdgeId ? edgeCatalog.get(incomingEdgeId) : undefined;
+  const edgeConfidence = incomingEdge ? Math.round(getEdgeConfidence(incomingEdge) * 100) : undefined;
+
+  const lines: string[] = [];
+  lines.push(`Node: ${node?.name ?? nodeId}`);
+
+  if (moduleNode?.name) {
+    lines.push(`Module: ${moduleNode.name}`);
+  }
+
+  if (node?.filePath && typeof node.line === 'number') {
+    lines.push(`Location: ${node.filePath}:${node.line}`);
+  }
+
+  if (!incomingEdge) {
+    lines.push('Incoming edge: flow entry point');
+  } else {
+    lines.push(`Incoming edge: ${incomingEdge.type}`);
+    if (typeof edgeConfidence === 'number') {
+      lines.push(`Confidence: ${edgeConfidence}%`);
+    }
+    if (incomingEdge.metadata?.provenance) {
+      lines.push(`Provenance: ${incomingEdge.metadata.provenance}`);
+    }
+    if (incomingEdge.metadata?.reason) {
+      lines.push(`Reason: ${incomingEdge.metadata.reason}`);
+    }
+  }
+
+  flowExplain.textContent = lines.join('\n');
+}
+
+function getEdgeConfidence(edge: GraphEdge): number {
+  const raw = edge.metadata?.confidence;
+  if (typeof raw !== 'number' || Number.isNaN(raw)) {
+    return 1;
+  }
+
+  return clamp(raw, 0, 1);
 }
 
 function applyLayout(graphData: GraphData, shouldFit: boolean): void {
