@@ -75,6 +75,103 @@ body {
 }
 
 #graph-canvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
+}
+
+.graph-stage {
+  position: relative;
+  min-height: 0;
+}
+
+.legend {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 4;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(149, 213, 178, 0.4);
+  background: rgba(10, 14, 12, 0.78);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(4px);
+}
+
+.legend h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: #c5d9c3;
+}
+
+.legend-grid {
+  display: grid;
+  grid-template-columns: 16px auto;
+  column-gap: 8px;
+  row-gap: 5px;
+  align-items: center;
+  font-size: 11px;
+  color: #e7efe4;
+}
+
+.legend-chip {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1px solid #a3b18a;
+  background: #3a5a40;
+}
+
+.legend-chip.module {
+  border-radius: 50%;
+  background: #1b4332;
+  border-color: #95d5b2;
+}
+
+.legend-chip.function {
+  border-radius: 4px;
+  background: #4f772d;
+  border-color: #cfe1b9;
+}
+
+.legend-chip.external {
+  border-radius: 50%;
+  background: #6c757d;
+  border-color: #ced4da;
+}
+
+.legend-line {
+  display: inline-block;
+  width: 14px;
+  border-top: 2px solid #a8b0b8;
+}
+
+.legend-line.call {
+  border-top-color: #f4a261;
+}
+
+.legend-line.dependency {
+  border-top-color: #84a59d;
+  border-top-style: dashed;
+}
+
+.legend-line.contains {
+  border-top-color: #52796f;
+  opacity: 0.6;
+}
+
+@media (max-width: 900px) {
+  .legend {
+    right: 8px;
+    top: 8px;
+    padding: 8px 10px;
+  }
+
+  .legend-grid {
+    font-size: 10px;
+    row-gap: 4px;
+  }
 }

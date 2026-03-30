@@ -216,7 +216,26 @@ class FlowDEPanel implements vscode.Disposable {
       <section class="status-row">
         <span id="status">Initializing graph view...</span>
       </section>
-      <main id="graph-canvas" aria-label="FlowDE graph"></main>
+      <main class="graph-stage">
+        <aside class="legend" aria-label="Graph legend">
+          <h2>Legend</h2>
+          <div class="legend-grid">
+            <span class="legend-chip module"></span>
+            <span>Module</span>
+            <span class="legend-chip function"></span>
+            <span>Function</span>
+            <span class="legend-chip external"></span>
+            <span>External module</span>
+            <span class="legend-line call"></span>
+            <span>Call</span>
+            <span class="legend-line dependency"></span>
+            <span>Dependency</span>
+            <span class="legend-line contains"></span>
+            <span>Contains</span>
+          </div>
+        </aside>
+        <div id="graph-canvas" aria-label="FlowDE graph"></div>
+      </main>
     </div>
     <script nonce="${nonce}" src="${scriptUri}"></script>
   </body>

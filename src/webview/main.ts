@@ -428,14 +428,6 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
 }
 
 function formatNodeLabel(node: GraphNode): string {
-  if (node.type === 'module') {
-    return `Module\n${node.name}`;
-  }
-
-  if (node.type === 'function') {
-    return `Function\n${node.name}`;
-  }
-
   return node.name;
 }
 
