@@ -1,5 +1,5 @@
 export type GraphNodeType = 'function' | 'variable' | 'module';
-export type GraphEdgeType = 'call' | 'dependency';
+export type GraphEdgeType = 'call' | 'dependency' | 'contains';
 
 export interface GraphNode {
   id: string;

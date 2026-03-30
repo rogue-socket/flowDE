@@ -5,7 +5,7 @@ declare function acquireVsCodeApi(): {
 };
 
 type GraphNodeType = 'function' | 'variable' | 'module';
-type GraphEdgeType = 'call' | 'dependency';
+type GraphEdgeType = 'call' | 'dependency' | 'contains';
 
 interface GraphNode {
   id: string;
@@ -117,6 +117,16 @@ const graph = cytoscape({
         'line-style': 'dashed',
         'line-color': '#84a59d',
         'target-arrow-color': '#84a59d'
+      }
+    },
+    {
+      selector: 'edge[type = "contains"]',
+      style: {
+        width: 1,
+        'line-style': 'solid',
+        'line-color': '#52796f',
+        'target-arrow-shape': 'none',
+        opacity: 0.42
       }
     }
   ]

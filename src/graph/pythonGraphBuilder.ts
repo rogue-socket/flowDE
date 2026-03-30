@@ -11,12 +11,22 @@ interface FunctionSymbol {
   filePath: string;
   line: number;
   moduleNodeId: string;
+  moduleName: string;
 }
 
 interface CallReference {
   sourceFunctionId: string;
   sourceModuleId: string;
+  sourceModuleName: string;
   calleeName: string;
+  calleePath: string[];
+}
+
+interface ImportBinding {
+  alias: string;
+  kind: 'module' | 'symbol';
+  moduleName: string;
+  symbolName?: string;
 }
 
 interface FileParseResult {
@@ -24,6 +34,7 @@ interface FileParseResult {
   functions: FunctionSymbol[];
   callRefs: CallReference[];
   dependencies: string[];
+  importBindings: ImportBinding[];
   warning?: string;
 }
 
@@ -42,6 +53,8 @@ export class PythonWorkspaceGraphBuilder {
     const dependencyRecords: Array<{ sourceModuleId: string; dependency: string }> = [];
     const moduleNameToNodeId = new Map<string, string>();
     const externalModuleNodes = new Map<string, GraphNode>();
+    const importBindingsByModuleId = new Map<string, ImportBinding[]>();
+    const dependenciesByModuleId = new Map<string, Set<string>>();
 
     for (const fileUri of files) {
       const relativePath = vscode.workspace.asRelativePath(fileUri, false);
@@ -53,6 +66,8 @@ export class PythonWorkspaceGraphBuilder {
 
         nodes.push(fileResult.moduleNode);
         moduleNameToNodeId.set(fileResult.moduleNode.name, fileResult.moduleNode.id);
+        importBindingsByModuleId.set(fileResult.moduleNode.id, fileResult.importBindings);
+        dependenciesByModuleId.set(fileResult.moduleNode.id, new Set(fileResult.dependencies));
         functionSymbols.push(...fileResult.functions);
         callRefs.push(...fileResult.callRefs);
 
@@ -86,16 +101,44 @@ export class PythonWorkspaceGraphBuilder {
     );
 
     const functionSymbolsByName = new Map<string, FunctionSymbol[]>();
+    const functionSymbolsByModuleAndName = new Map<string, FunctionSymbol[]>();
+
     for (const symbol of functionSymbols) {
       const list = functionSymbolsByName.get(symbol.name) ?? [];
       list.push(symbol);
       functionSymbolsByName.set(symbol.name, list);
+
+      const scopedKey = this.functionScopeKey(symbol.moduleName, symbol.name);
+      const scopedList = functionSymbolsByModuleAndName.get(scopedKey) ?? [];
+      scopedList.push(symbol);
+      functionSymbolsByModuleAndName.set(scopedKey, scopedList);
     }
 
     const uniqueEdgeIds = new Set<string>();
 
+    for (const symbol of functionSymbols) {
+      const containsEdgeId = `edge:contains:${symbol.moduleNodeId}->${symbol.id}`;
+      if (uniqueEdgeIds.has(containsEdgeId)) {
+        continue;
+      }
+
+      uniqueEdgeIds.add(containsEdgeId);
+      edges.push({
+        id: containsEdgeId,
+        source: symbol.moduleNodeId,
+        target: symbol.id,
+        type: 'contains'
+      });
+    }
+
     for (const callRef of callRefs) {
-      const targetFunctionId = this.resolveCallTarget(callRef, functionSymbolsByName);
+      const targetFunctionId = this.resolveCallTarget(
+        callRef,
+        functionSymbolsByName,
+        functionSymbolsByModuleAndName,
+        importBindingsByModuleId,
+        dependenciesByModuleId
+      );
       if (!targetFunctionId) {
         continue;
       }
@@ -172,14 +215,20 @@ export class PythonWorkspaceGraphBuilder {
       line: 1
     };
 
-    const dependencies = this.extractDependencies(source);
-    const parseArtifacts = this.collectFunctionsAndCalls(source, relativePath, moduleNodeId);
+    const importArtifacts = this.extractImportArtifacts(source, moduleName, relativePath);
+    const parseArtifacts = this.collectFunctionsAndCalls(
+      source,
+      relativePath,
+      moduleNodeId,
+      moduleName
+    );
 
     return {
       moduleNode,
       functions: parseArtifacts.functions,
       callRefs: parseArtifacts.callRefs,
-      dependencies,
+      dependencies: importArtifacts.dependencies,
+      importBindings: importArtifacts.importBindings,
       warning: parseArtifacts.warning
     };
   }
@@ -187,7 +236,8 @@ export class PythonWorkspaceGraphBuilder {
   private collectFunctionsAndCalls(
     source: string,
     relativePath: string,
-    moduleNodeId: string
+    moduleNodeId: string,
+    moduleName: string
   ): { functions: FunctionSymbol[]; callRefs: CallReference[]; warning?: string } {
     const functions: FunctionSymbol[] = [];
     const callRefs: CallReference[] = [];
@@ -211,7 +261,8 @@ export class PythonWorkspaceGraphBuilder {
               name: functionName,
               filePath: relativePath,
               line,
-              moduleNodeId
+              moduleNodeId,
+              moduleName
             });
 
             currentFunctionId = functionId;
@@ -219,12 +270,14 @@ export class PythonWorkspaceGraphBuilder {
         }
 
         if (node.type.name === 'CallExpression' && currentFunctionId) {
-          const calleeName = this.extractCalleeName(node, source);
-          if (calleeName) {
+          const calleePath = this.extractCalleePath(node, source);
+          if (calleePath && calleePath.length > 0) {
             callRefs.push({
               sourceFunctionId: currentFunctionId,
               sourceModuleId: moduleNodeId,
-              calleeName
+              sourceModuleName: moduleName,
+              calleeName: calleePath[calleePath.length - 1],
+              calleePath
             });
           }
         }
@@ -249,19 +302,93 @@ export class PythonWorkspaceGraphBuilder {
 
   private resolveCallTarget(
     callRef: CallReference,
-    functionSymbolsByName: Map<string, FunctionSymbol[]>
+    functionSymbolsByName: Map<string, FunctionSymbol[]>,
+    functionSymbolsByModuleAndName: Map<string, FunctionSymbol[]>,
+    importBindingsByModuleId: Map<string, ImportBinding[]>,
+    dependenciesByModuleId: Map<string, Set<string>>
   ): string | undefined {
     const candidates = functionSymbolsByName.get(callRef.calleeName);
     if (!candidates || candidates.length === 0) {
       return undefined;
     }
 
+    const importBindings = importBindingsByModuleId.get(callRef.sourceModuleId) ?? [];
+    const dependencies = dependenciesByModuleId.get(callRef.sourceModuleId) ?? new Set<string>();
+
+    if (callRef.calleePath.length > 1) {
+      const rootSymbol = callRef.calleePath[0];
+      const qualifierPath = callRef.calleePath.slice(1, -1);
+      const importedModules = importBindings.filter(
+        (binding) => binding.kind === 'module' && binding.alias === rootSymbol
+      );
+
+      for (const binding of importedModules) {
+        const targetModuleName =
+          qualifierPath.length > 0
+            ? `${binding.moduleName}.${qualifierPath.join('.')}`
+            : binding.moduleName;
+
+        const scopedCandidates = this.lookupScopedCandidates(
+          functionSymbolsByModuleAndName,
+          targetModuleName,
+          callRef.calleeName
+        );
+
+        if (scopedCandidates.length === 1) {
+          return scopedCandidates[0].id;
+        }
+
+        const dependencyScopedCandidates = scopedCandidates.filter((candidate) =>
+          dependencies.has(candidate.moduleName)
+        );
+
+        if (dependencyScopedCandidates.length === 1) {
+          return dependencyScopedCandidates[0].id;
+        }
+      }
+    }
+
+    if (callRef.calleePath.length === 1) {
+      const importedSymbols = importBindings.filter(
+        (binding) => binding.kind === 'symbol' && binding.alias === callRef.calleeName
+      );
+
+      const importedSymbolMatches = new Map<string, FunctionSymbol>();
+      for (const binding of importedSymbols) {
+        if (!binding.symbolName) {
+          continue;
+        }
+
+        const scopedCandidates = this.lookupScopedCandidates(
+          functionSymbolsByModuleAndName,
+          binding.moduleName,
+          binding.symbolName
+        );
+
+        for (const candidate of scopedCandidates) {
+          importedSymbolMatches.set(candidate.id, candidate);
+        }
+      }
+
+      if (importedSymbolMatches.size === 1) {
+        return [...importedSymbolMatches.values()][0].id;
+      }
+    }
+
     const sameModuleCandidates = candidates.filter(
-      (candidate) => candidate.moduleNodeId === callRef.sourceModuleId
+      (candidate) => candidate.moduleName === callRef.sourceModuleName
     );
 
     if (sameModuleCandidates.length === 1) {
       return sameModuleCandidates[0].id;
+    }
+
+    const dependencyScopedCandidates = candidates.filter((candidate) =>
+      dependencies.has(candidate.moduleName)
+    );
+
+    if (dependencyScopedCandidates.length === 1) {
+      return dependencyScopedCandidates[0].id;
     }
 
     if (candidates.length === 1) {
@@ -271,37 +398,60 @@ export class PythonWorkspaceGraphBuilder {
     return undefined;
   }
 
-  private extractDependencies(source: string): string[] {
+  private extractImportArtifacts(
+    source: string,
+    moduleName: string,
+    relativePath: string
+  ): { dependencies: string[]; importBindings: ImportBinding[] } {
     const dependencies = new Set<string>();
+    const importBindings: ImportBinding[] = [];
 
     for (const match of source.matchAll(/^\s*import\s+([^\n#]+)/gm)) {
-      const modules = match[1].split(',');
-      for (const moduleChunk of modules) {
-        const moduleName = moduleChunk.trim().split(/\s+as\s+/i)[0];
-        const normalized = this.normalizeDependencyName(moduleName);
-        if (normalized) {
-          dependencies.add(normalized);
+      const importTargets = match[1].split(',');
+
+      for (const target of importTargets) {
+        const parsedTarget = this.parseAliasedTarget(target.trim());
+        if (!parsedTarget) {
+          continue;
         }
+
+        dependencies.add(parsedTarget.name);
+        importBindings.push({
+          alias: parsedTarget.alias ?? parsedTarget.name.split('.')[0],
+          kind: 'module',
+          moduleName: parsedTarget.name
+        });
       }
     }
 
-    for (const match of source.matchAll(/^\s*from\s+([a-zA-Z_][\w\.]*)\s+import\s+/gm)) {
-      const normalized = this.normalizeDependencyName(match[1]);
-      if (normalized) {
-        dependencies.add(normalized);
+    for (const match of source.matchAll(/^\s*from\s+([\.\w]+)\s+import\s+([^\n#]+)/gm)) {
+      const importModule = this.resolveImportModule(match[1], moduleName, relativePath);
+      if (!importModule) {
+        continue;
+      }
+
+      dependencies.add(importModule);
+      const importTargets = match[2].replace(/[()]/g, '').split(',');
+
+      for (const target of importTargets) {
+        const parsedTarget = this.parseAliasedTarget(target.trim());
+        if (!parsedTarget || parsedTarget.name === '*') {
+          continue;
+        }
+
+        importBindings.push({
+          alias: parsedTarget.alias ?? parsedTarget.name,
+          kind: 'symbol',
+          moduleName: importModule,
+          symbolName: parsedTarget.name
+        });
       }
     }
 
-    return [...dependencies];
-  }
-
-  private normalizeDependencyName(name: string): string | undefined {
-    const trimmed = name.trim();
-    if (!trimmed || trimmed.startsWith('.')) {
-      return undefined;
-    }
-
-    return trimmed;
+    return {
+      dependencies: [...dependencies],
+      importBindings
+    };
   }
 
   private moduleNameFromPath(relativePath: string): string {
@@ -323,7 +473,7 @@ export class PythonWorkspaceGraphBuilder {
     return undefined;
   }
 
-  private extractCalleeName(node: SyntaxNode, source: string): string | undefined {
+  private extractCalleePath(node: SyntaxNode, source: string): string[] | undefined {
     let calleeNode: SyntaxNode | undefined;
 
     for (let child = node.firstChild; child; child = child.nextSibling) {
@@ -343,7 +493,80 @@ export class PythonWorkspaceGraphBuilder {
       return undefined;
     }
 
-    return parts[parts.length - 1];
+    return parts;
+  }
+
+  private parseAliasedTarget(target: string): { name: string; alias?: string } | undefined {
+    const normalizedTarget = target.trim();
+    if (!normalizedTarget) {
+      return undefined;
+    }
+
+    const parsed = normalizedTarget.match(/^([A-Za-z_][\w\.]*|\*)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+    if (!parsed) {
+      return undefined;
+    }
+
+    return {
+      name: parsed[1],
+      alias: parsed[2]
+    };
+  }
+
+  private resolveImportModule(
+    rawImportModule: string,
+    currentModuleName: string,
+    relativePath: string
+  ): string | undefined {
+    if (!rawImportModule.startsWith('.')) {
+      return rawImportModule;
+    }
+
+    const parsed = rawImportModule.match(/^(\.+)(.*)$/);
+    if (!parsed) {
+      return undefined;
+    }
+
+    const level = parsed[1].length;
+    const remainder = parsed[2].trim();
+    const currentPackageName = this.packageNameFromModule(currentModuleName, relativePath);
+    const packageParts = currentPackageName ? currentPackageName.split('.') : [];
+    const upwardLevels = level - 1;
+
+    if (upwardLevels > packageParts.length) {
+      return remainder || undefined;
+    }
+
+    const baseParts = packageParts.slice(0, packageParts.length - upwardLevels);
+    const importParts = remainder ? remainder.split('.') : [];
+    const resolvedParts = [...baseParts, ...importParts].filter((part) => part.length > 0);
+
+    return resolvedParts.length > 0 ? resolvedParts.join('.') : undefined;
+  }
+
+  private packageNameFromModule(moduleName: string, relativePath: string): string {
+    if (relativePath.endsWith('/__init__.py') || relativePath === '__init__.py') {
+      return moduleName;
+    }
+
+    const lastDotIndex = moduleName.lastIndexOf('.');
+    if (lastDotIndex < 0) {
+      return '';
+    }
+
+    return moduleName.slice(0, lastDotIndex);
+  }
+
+  private functionScopeKey(moduleName: string, functionName: string): string {
+    return `${moduleName}::${functionName}`;
+  }
+
+  private lookupScopedCandidates(
+    functionSymbolsByModuleAndName: Map<string, FunctionSymbol[]>,
+    moduleName: string,
+    functionName: string
+  ): FunctionSymbol[] {
+    return functionSymbolsByModuleAndName.get(this.functionScopeKey(moduleName, functionName)) ?? [];
   }
 
   private buildLineStartMap(source: string): number[] {

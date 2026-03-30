@@ -6,7 +6,7 @@ It visualizes:
 
 - Functions as nodes
 - Modules as nodes
-- Function calls and module dependencies as edges
+- Function calls, module dependencies, and module containment as edges
 
 And it keeps the text-first workflow intact by letting you click a node and jump directly to the exact source line.
 
@@ -144,6 +144,8 @@ Performance check:
 Python is dynamic, so this MVP parser intentionally prioritizes resilience over perfect precision.
 
 - It tolerates imperfect code by returning partial graphs
+- It uses import-aware call resolution (`import x as y`, `from a import b`) to improve cross-file linking
+- It adds module containment edges so function nodes remain structurally connected
 - It reports parse issues through warning metadata
 - Ambiguous call targets are skipped rather than guessed
 
