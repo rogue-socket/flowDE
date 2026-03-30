@@ -206,10 +206,14 @@ class FlowDEPanel implements vscode.Disposable {
       <header class="toolbar">
         <div class="title-group">
           <h1>FlowDE</h1>
-          <p id="subtitle">Graph-first code comprehension</p>
+          <p id="subtitle">Code graph</p>
         </div>
         <div class="toolbar-actions">
           <button id="layout-btn" type="button">Layout: Clustered</button>
+          <button id="fit-btn" type="button">Fit</button>
+          <button id="zoom-out-btn" type="button" aria-label="Zoom out">-</button>
+          <button id="zoom-reset-btn" type="button">100%</button>
+          <button id="zoom-in-btn" type="button" aria-label="Zoom in">+</button>
           <button id="refresh-btn" type="button">Refresh</button>
         </div>
       </header>
@@ -217,24 +221,14 @@ class FlowDEPanel implements vscode.Disposable {
         <span id="status">Initializing graph view...</span>
       </section>
       <main class="graph-stage">
-        <aside class="legend" aria-label="Graph legend">
-          <h2>Legend</h2>
-          <div class="legend-grid">
-            <span class="legend-chip module"></span>
-            <span>Module</span>
-            <span class="legend-chip function"></span>
-            <span>Function</span>
-            <span class="legend-chip external"></span>
-            <span>External module</span>
-            <span class="legend-line call"></span>
-            <span>Call</span>
-            <span class="legend-line dependency"></span>
-            <span>Dependency</span>
-            <span class="legend-line contains"></span>
-            <span>Contains</span>
-          </div>
-        </aside>
         <div id="graph-canvas" aria-label="FlowDE graph"></div>
+        <div class="legend-inline" aria-label="Graph legend">
+          <span class="legend-item"><span class="legend-dot module"></span>Module</span>
+          <span class="legend-item"><span class="legend-dot function"></span>Function</span>
+          <span class="legend-item"><span class="legend-dot external"></span>External</span>
+          <span class="legend-item"><span class="legend-edge call"></span>Call</span>
+          <span class="legend-item"><span class="legend-edge dependency"></span>Dependency</span>
+        </div>
       </main>
     </div>
     <script nonce="${nonce}" src="${scriptUri}"></script>

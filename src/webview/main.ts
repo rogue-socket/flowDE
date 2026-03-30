@@ -57,17 +57,29 @@ const vscode = acquireVsCodeApi();
 const graphContainer = getRequiredElement<HTMLElement>('#graph-canvas');
 const statusText = getRequiredElement<HTMLElement>('#status');
 const layoutButton = getRequiredElement<HTMLButtonElement>('#layout-btn');
+const fitButton = getRequiredElement<HTMLButtonElement>('#fit-btn');
+const zoomOutButton = getRequiredElement<HTMLButtonElement>('#zoom-out-btn');
+const zoomResetButton = getRequiredElement<HTMLButtonElement>('#zoom-reset-btn');
+const zoomInButton = getRequiredElement<HTMLButtonElement>('#zoom-in-btn');
 const refreshButton = getRequiredElement<HTMLButtonElement>('#refresh-btn');
 let currentLayoutMode: LayoutMode = 'clustered';
 let latestGraphData: GraphData | undefined;
+let hasInitializedViewport = false;
+
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 2.4;
 
 const graph = cytoscape({
   container: graphContainer,
   elements: [],
+  minZoom: MIN_ZOOM,
+  maxZoom: MAX_ZOOM,
+  userZoomingEnabled: true,
+  userPanningEnabled: true,
   layout: {
     name: 'grid'
   },
-  wheelSensitivity: 0.15,
+  wheelSensitivity: 0.07,
   style: [
     {
       selector: 'node',
@@ -178,8 +190,33 @@ layoutButton.addEventListener('click', () => {
     currentLayoutMode === 'clustered' ? 'Layout: Clustered' : 'Layout: Force';
 
   if (latestGraphData) {
-    applyLayout(latestGraphData);
+    applyLayout(latestGraphData, true);
   }
+});
+
+fitButton.addEventListener('click', () => {
+  graph.fit(graph.elements(), 80);
+  updateZoomResetLabel();
+});
+
+zoomInButton.addEventListener('click', () => {
+  zoomByFactor(1.16);
+});
+
+zoomOutButton.addEventListener('click', () => {
+  zoomByFactor(1 / 1.16);
+});
+
+zoomResetButton.addEventListener('click', () => {
+  graph.zoom({
+    level: 1,
+    renderedPosition: { x: graph.width() / 2, y: graph.height() / 2 }
+  });
+  updateZoomResetLabel();
+});
+
+graph.on('zoom', () => {
+  updateZoomResetLabel();
 });
 
 window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
@@ -197,6 +234,7 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
   }
 });
 
+updateZoomResetLabel();
 vscode.postMessage({ type: 'ready' });
 
 function renderGraph(graphData: GraphData): void {
@@ -226,31 +264,35 @@ function renderGraph(graphData: GraphData): void {
   graph.elements().remove();
   graph.add(elements);
 
-  applyLayout(graphData);
-
-  const warningSuffix =
-    graphData.meta.parseWarnings.length > 0
-      ? ` | warnings: ${graphData.meta.parseWarnings.length}`
-      : '';
+  const shouldFit = !hasInitializedViewport;
+  applyLayout(graphData, shouldFit);
+  if (graphData.nodes.length > 0) {
+    hasInitializedViewport = true;
+  }
 
   const diagnostics = graphData.meta.diagnostics;
-  const relationSuffix = ` | calls resolved: ${diagnostics.resolvedCalls}, unresolved: ${diagnostics.unresolvedCalls}, ambiguous: ${diagnostics.ambiguousCalls}`;
+  const totalCalls = diagnostics.resolvedCalls + diagnostics.unresolvedCalls;
+  const relationSuffix =
+    totalCalls > 0
+      ? ` | calls: ${diagnostics.resolvedCalls}/${totalCalls} resolved`
+      : ' | calls: none';
   const cacheTotal = diagnostics.parserCacheHits + diagnostics.parserCacheMisses;
   const cacheSuffix =
     cacheTotal > 0
-      ? ` | cache hit: ${diagnostics.parserCacheHits}/${cacheTotal}`
+      ? ` | cache: ${diagnostics.parserCacheHits}/${cacheTotal}`
       : '';
+  const warningCompact = graphData.meta.parseWarnings.length > 0 ? ' | warnings' : '';
 
-  statusText.textContent = `Workspace ${graphData.meta.workspaceName}: ${graphData.nodes.length} nodes, ${graphData.edges.length} edges from ${graphData.meta.fileCount} Python files${warningSuffix}${relationSuffix}${cacheSuffix}`;
+  statusText.textContent = `${graphData.meta.workspaceName} | ${graphData.nodes.length} nodes | ${graphData.edges.length} edges${relationSuffix}${cacheSuffix}${warningCompact}`;
 }
 
-function applyLayout(graphData: GraphData): void {
+function applyLayout(graphData: GraphData, shouldFit: boolean): void {
   if (graphData.nodes.length === 0) {
     return;
   }
 
   if (currentLayoutMode === 'clustered') {
-    applyClusteredLayout(graphData);
+    applyClusteredLayout(graphData, shouldFit);
     return;
   }
 
@@ -259,12 +301,12 @@ function applyLayout(graphData: GraphData): void {
     animate: false,
     nodeRepulsion: 240000,
     idealEdgeLength: 100,
-    fit: true,
+    fit: shouldFit,
     padding: 40
   }).run();
 }
 
-function applyClusteredLayout(graphData: GraphData): void {
+function applyClusteredLayout(graphData: GraphData, shouldFit: boolean): void {
   const positions = computeClusteredPositions(graphData);
   const positionMap: Record<string, Point> = {};
   for (const [id, point] of positions.entries()) {
@@ -275,7 +317,7 @@ function applyClusteredLayout(graphData: GraphData): void {
     name: 'preset',
     positions: positionMap,
     animate: false,
-    fit: true,
+    fit: shouldFit,
     padding: 70
   }).run();
 }
@@ -450,6 +492,23 @@ function formatNodeLabel(node: GraphNode): string {
 function getModuleNodeId(node: GraphNode): string | undefined {
   const rawValue = node.metadata?.moduleNodeId;
   return typeof rawValue === 'string' ? rawValue : undefined;
+}
+
+function zoomByFactor(factor: number): void {
+  const nextZoom = clamp(graph.zoom() * factor, MIN_ZOOM, MAX_ZOOM);
+  graph.zoom({
+    level: nextZoom,
+    renderedPosition: { x: graph.width() / 2, y: graph.height() / 2 }
+  });
+  updateZoomResetLabel();
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function updateZoomResetLabel(): void {
+  zoomResetButton.textContent = `${Math.round(graph.zoom() * 100)}%`;
 }
 
 function getRequiredElement<T extends Element>(selector: string): T {
