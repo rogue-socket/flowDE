@@ -220,19 +220,32 @@ class FlowDEPanel implements vscode.Disposable {
       <section class="status-row">
         <span id="status">Initializing graph view...</span>
       </section>
-      <main class="graph-stage">
-        <div id="graph-canvas" aria-label="FlowDE graph"></div>
-        <aside class="minimap" aria-label="Graph overview">
-          <div class="minimap-title">Overview</div>
-          <canvas id="minimap-canvas" width="220" height="140"></canvas>
+      <main class="workspace-layout">
+        <aside class="flow-sidebar" aria-label="Flow sidebar">
+          <div class="flow-sidebar-header">
+            <h2>Flows</h2>
+            <span id="flow-meta">0 discovered</span>
+          </div>
+          <ul id="flow-list" class="flow-list"></ul>
+          <div class="flow-steps-panel">
+            <h3>Flow Steps</h3>
+            <ol id="flow-steps" class="flow-steps"></ol>
+          </div>
         </aside>
-        <div class="legend-inline" aria-label="Graph legend">
-          <span class="legend-item"><span class="legend-dot module"></span>Module</span>
-          <span class="legend-item"><span class="legend-dot function"></span>Function</span>
-          <span class="legend-item"><span class="legend-dot external"></span>External</span>
-          <span class="legend-item"><span class="legend-edge call"></span>Call</span>
-          <span class="legend-item"><span class="legend-edge dependency"></span>Dependency</span>
-        </div>
+        <section class="graph-stage">
+          <div id="graph-canvas" aria-label="FlowDE graph"></div>
+          <aside class="minimap" aria-label="Graph overview">
+            <div class="minimap-title">Overview</div>
+            <canvas id="minimap-canvas" width="220" height="140"></canvas>
+          </aside>
+          <div class="legend-inline" aria-label="Graph legend">
+            <span class="legend-item"><span class="legend-dot module"></span>Module</span>
+            <span class="legend-item"><span class="legend-dot function"></span>Function</span>
+            <span class="legend-item"><span class="legend-dot external"></span>External</span>
+            <span class="legend-item"><span class="legend-edge call"></span>Call</span>
+            <span class="legend-item"><span class="legend-edge dependency"></span>Dependency</span>
+          </div>
+        </section>
       </main>
     </div>
     <script nonce="${nonce}" src="${scriptUri}"></script>

@@ -53,6 +53,13 @@ interface Point {
   y: number;
 }
 
+interface FlowDefinition {
+  id: string;
+  name: string;
+  nodeIds: string[];
+  edgeIds: string[];
+}
+
 interface MinimapTransform {
   scale: number;
   offsetX: number;
@@ -64,6 +71,9 @@ const graphContainer = getRequiredElement<HTMLElement>('#graph-canvas');
 const minimapCanvas = getRequiredElement<HTMLCanvasElement>('#minimap-canvas');
 const minimapContext = getRequiredCanvasContext(minimapCanvas);
 const statusText = getRequiredElement<HTMLElement>('#status');
+const flowMeta = getRequiredElement<HTMLElement>('#flow-meta');
+const flowList = getRequiredElement<HTMLUListElement>('#flow-list');
+const flowSteps = getRequiredElement<HTMLOListElement>('#flow-steps');
 const layoutButton = getRequiredElement<HTMLButtonElement>('#layout-btn');
 const fitButton = getRequiredElement<HTMLButtonElement>('#fit-btn');
 const zoomOutButton = getRequiredElement<HTMLButtonElement>('#zoom-out-btn');
@@ -75,6 +85,11 @@ let latestGraphData: GraphData | undefined;
 let hasInitializedViewport = false;
 let minimapUpdateRequested = false;
 let minimapTransform: MinimapTransform | undefined;
+let flowDefinitions: FlowDefinition[] = [];
+let selectedFlowId: string | undefined;
+let selectedStepIndex: number | undefined;
+const nodeCatalog = new Map<string, GraphNode>();
+const callEdgeByPair = new Map<string, string>();
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2.4;
@@ -107,6 +122,29 @@ const graph = cytoscape({
         padding: '16px',
         'border-width': 1,
         'border-color': '#a3b18a'
+      }
+    },
+    {
+      selector: 'node.dimmed',
+      style: {
+        opacity: 0.16,
+        'text-opacity': 0.2
+      }
+    },
+    {
+      selector: 'node.flow-node',
+      style: {
+        opacity: 1,
+        'text-opacity': 1,
+        'border-width': 2,
+        'border-color': '#7ae582'
+      }
+    },
+    {
+      selector: 'node.flow-current',
+      style: {
+        'border-width': 3,
+        'border-color': '#f4a261'
       }
     },
     {
@@ -145,6 +183,21 @@ const graph = cytoscape({
       }
     },
     {
+      selector: 'edge.dimmed',
+      style: {
+        opacity: 0.06
+      }
+    },
+    {
+      selector: 'edge.flow-edge',
+      style: {
+        width: 2.4,
+        opacity: 0.95,
+        'line-color': '#f4a261',
+        'target-arrow-color': '#f4a261'
+      }
+    },
+    {
       selector: 'edge[type = "call"]',
       style: {
         'line-color': '#f4a261',
@@ -177,6 +230,16 @@ graph.on('tap', 'node', (event: cytoscape.EventObject) => {
   const nodeId = node.id();
   const filePath = node.data('filePath');
   const line = node.data('line');
+
+  const activeFlow = getSelectedFlow();
+  if (activeFlow) {
+    const stepIndex = activeFlow.nodeIds.indexOf(nodeId);
+    if (stepIndex >= 0) {
+      selectedStepIndex = stepIndex;
+      renderFlowSteps(activeFlow);
+      applyFlowHighlighting();
+    }
+  }
 
   if (!nodeId || !filePath || typeof line !== 'number') {
     return;
@@ -223,6 +286,57 @@ zoomResetButton.addEventListener('click', () => {
     renderedPosition: { x: graph.width() / 2, y: graph.height() / 2 }
   });
   updateZoomResetLabel();
+});
+
+flowList.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement | null;
+  const button = target?.closest<HTMLButtonElement>('button[data-flow-id]');
+  if (!button) {
+    return;
+  }
+
+  const nextFlowId = button.dataset.flowId;
+  if (!nextFlowId) {
+    return;
+  }
+
+  selectedFlowId = nextFlowId;
+  selectedStepIndex = 0;
+  renderFlowSidebar();
+  applyFlowHighlighting();
+
+  const activeFlow = getSelectedFlow();
+  if (activeFlow && activeFlow.nodeIds.length > 0) {
+    focusNode(activeFlow.nodeIds[0], true);
+  }
+});
+
+flowSteps.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement | null;
+  const button = target?.closest<HTMLButtonElement>('button[data-step-index]');
+  if (!button) {
+    return;
+  }
+
+  const stepIndexText = button.dataset.stepIndex;
+  if (!stepIndexText) {
+    return;
+  }
+
+  const stepIndex = Number.parseInt(stepIndexText, 10);
+  if (!Number.isFinite(stepIndex)) {
+    return;
+  }
+
+  const activeFlow = getSelectedFlow();
+  if (!activeFlow || stepIndex < 0 || stepIndex >= activeFlow.nodeIds.length) {
+    return;
+  }
+
+  selectedStepIndex = stepIndex;
+  renderFlowSteps(activeFlow);
+  applyFlowHighlighting();
+  focusNode(activeFlow.nodeIds[stepIndex], true);
 });
 
 graph.on('zoom', () => {
@@ -275,6 +389,28 @@ vscode.postMessage({ type: 'ready' });
 
 function renderGraph(graphData: GraphData): void {
   latestGraphData = graphData;
+  nodeCatalog.clear();
+  callEdgeByPair.clear();
+
+  for (const node of graphData.nodes) {
+    nodeCatalog.set(node.id, node);
+  }
+
+  for (const edge of graphData.edges) {
+    if (edge.type !== 'call') {
+      continue;
+    }
+
+    callEdgeByPair.set(flowPairKey(edge.source, edge.target), edge.id);
+  }
+
+  flowDefinitions = buildFlowDefinitions(graphData);
+  if (selectedFlowId && !flowDefinitions.some((flow) => flow.id === selectedFlowId)) {
+    selectedFlowId = undefined;
+    selectedStepIndex = undefined;
+  }
+
+  renderFlowSidebar();
 
   const elements = [
     ...graphData.nodes.map((node) => ({
@@ -306,6 +442,8 @@ function renderGraph(graphData: GraphData): void {
     hasInitializedViewport = true;
   }
 
+  applyFlowHighlighting();
+
   const diagnostics = graphData.meta.diagnostics;
   const totalCalls = diagnostics.resolvedCalls + diagnostics.unresolvedCalls;
   const relationSuffix =
@@ -320,6 +458,277 @@ function renderGraph(graphData: GraphData): void {
   const warningCompact = graphData.meta.parseWarnings.length > 0 ? ' | warnings' : '';
 
   statusText.textContent = `${graphData.meta.workspaceName} | ${graphData.nodes.length} nodes | ${graphData.edges.length} edges${relationSuffix}${cacheSuffix}${warningCompact}`;
+}
+
+function renderFlowSidebar(): void {
+  flowMeta.textContent = `${flowDefinitions.length} discovered`;
+  flowList.replaceChildren();
+
+  if (flowDefinitions.length === 0) {
+    const placeholder = document.createElement('li');
+    placeholder.className = 'flow-placeholder';
+    placeholder.textContent = 'No callable flow patterns detected yet.';
+    flowList.appendChild(placeholder);
+    renderFlowSteps(undefined);
+    return;
+  }
+
+  for (const [index, flow] of flowDefinitions.entries()) {
+    const item = document.createElement('li');
+    item.className = 'flow-list-item';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.flowId = flow.id;
+    button.className = `flow-button${flow.id === selectedFlowId ? ' active' : ''}`;
+    button.textContent = `${index + 1}. ${flow.name}`;
+
+    item.appendChild(button);
+    flowList.appendChild(item);
+  }
+
+  renderFlowSteps(getSelectedFlow());
+}
+
+function renderFlowSteps(flow: FlowDefinition | undefined): void {
+  flowSteps.replaceChildren();
+
+  if (!flow) {
+    const placeholder = document.createElement('li');
+    placeholder.className = 'flow-placeholder';
+    placeholder.textContent = 'Select a flow to highlight the involved blocks.';
+    flowSteps.appendChild(placeholder);
+    return;
+  }
+
+  if (typeof selectedStepIndex !== 'number' || selectedStepIndex >= flow.nodeIds.length) {
+    selectedStepIndex = 0;
+  }
+
+  flow.nodeIds.forEach((nodeId, index) => {
+    const node = nodeCatalog.get(nodeId);
+    const item = document.createElement('li');
+    item.className = 'flow-step-item';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.stepIndex = String(index);
+    button.className = `flow-step-button${index === selectedStepIndex ? ' active' : ''}`;
+
+    const label = document.createElement('span');
+    label.textContent = node?.name ?? nodeId;
+
+    const order = document.createElement('span');
+    order.className = 'step-index';
+    order.textContent = String(index + 1);
+
+    button.appendChild(label);
+    button.appendChild(order);
+    item.appendChild(button);
+    flowSteps.appendChild(item);
+  });
+}
+
+function applyFlowHighlighting(): void {
+  graph.elements().removeClass('dimmed flow-node flow-edge flow-current');
+
+  const activeFlow = getSelectedFlow();
+  if (!activeFlow) {
+    scheduleMinimapRender();
+    return;
+  }
+
+  const activeNodes = new Set(activeFlow.nodeIds);
+  const activeEdges = new Set(activeFlow.edgeIds);
+
+  graph.nodes().forEach((node) => {
+    if (activeNodes.has(node.id())) {
+      node.addClass('flow-node');
+      return;
+    }
+
+    node.addClass('dimmed');
+  });
+
+  graph.edges().forEach((edge) => {
+    if (activeEdges.has(edge.id())) {
+      edge.addClass('flow-edge');
+      return;
+    }
+
+    edge.addClass('dimmed');
+  });
+
+  if (
+    typeof selectedStepIndex === 'number' &&
+    selectedStepIndex >= 0 &&
+    selectedStepIndex < activeFlow.nodeIds.length
+  ) {
+    const currentNodeId = activeFlow.nodeIds[selectedStepIndex];
+    graph.getElementById(currentNodeId).addClass('flow-current');
+  }
+
+  scheduleMinimapRender();
+}
+
+function getSelectedFlow(): FlowDefinition | undefined {
+  if (!selectedFlowId) {
+    return undefined;
+  }
+
+  return flowDefinitions.find((flow) => flow.id === selectedFlowId);
+}
+
+function focusNode(nodeId: string, animate: boolean): void {
+  const element = graph.getElementById(nodeId);
+  if (element.length === 0) {
+    return;
+  }
+
+  const zoomLevel = clamp(Math.max(graph.zoom(), 0.9), MIN_ZOOM, MAX_ZOOM);
+  if (animate) {
+    graph.animate(
+      {
+        center: { eles: element },
+        zoom: zoomLevel
+      },
+      {
+        duration: 220,
+        easing: 'ease-out-cubic'
+      }
+    );
+    return;
+  }
+
+  graph.center(element);
+}
+
+function buildFlowDefinitions(graphData: GraphData): FlowDefinition[] {
+  const functionNodes = graphData.nodes.filter((node) => node.type === 'function');
+  if (functionNodes.length === 0) {
+    return [];
+  }
+
+  const functionIds = new Set(functionNodes.map((node) => node.id));
+  const adjacency = new Map<string, Set<string>>();
+  const indegree = new Map<string, number>();
+  const outdegree = new Map<string, number>();
+
+  for (const functionNode of functionNodes) {
+    adjacency.set(functionNode.id, new Set<string>());
+    indegree.set(functionNode.id, 0);
+    outdegree.set(functionNode.id, 0);
+  }
+
+  for (const edge of graphData.edges) {
+    if (edge.type !== 'call') {
+      continue;
+    }
+
+    if (!functionIds.has(edge.source) || !functionIds.has(edge.target)) {
+      continue;
+    }
+
+    adjacency.get(edge.source)?.add(edge.target);
+  }
+
+  for (const [sourceId, targets] of adjacency.entries()) {
+    outdegree.set(sourceId, targets.size);
+
+    for (const targetId of targets) {
+      indegree.set(targetId, (indegree.get(targetId) ?? 0) + 1);
+    }
+  }
+
+  const nameById = new Map(functionNodes.map((node) => [node.id, node.name]));
+  const sortedRoots = [...functionIds]
+    .filter((id) => (outdegree.get(id) ?? 0) > 0 && (indegree.get(id) ?? 0) === 0)
+    .sort((a, b) => (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b));
+
+  const fallbackRoots = [...functionIds]
+    .filter((id) => (outdegree.get(id) ?? 0) > 0)
+    .sort((a, b) => (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b));
+
+  const roots = sortedRoots.length > 0 ? sortedRoots : fallbackRoots;
+  const maxFlowDepth = 10;
+  const maxFlowCount = 80;
+  const pathSignatures = new Set<string>();
+  const paths: string[][] = [];
+
+  const addPath = (path: string[]): void => {
+    const signature = path.join('>');
+    if (pathSignatures.has(signature)) {
+      return;
+    }
+
+    pathSignatures.add(signature);
+    paths.push(path);
+  };
+
+  const walk = (path: string[], currentId: string): void => {
+    if (paths.length >= maxFlowCount) {
+      return;
+    }
+
+    const nextCandidates = [...(adjacency.get(currentId) ?? [])].filter(
+      (candidate) => !path.includes(candidate)
+    );
+
+    if (nextCandidates.length === 0 || path.length >= maxFlowDepth) {
+      addPath(path);
+      return;
+    }
+
+    nextCandidates
+      .sort((a, b) => (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b))
+      .forEach((nextId) => walk([...path, nextId], nextId));
+  };
+
+  for (const rootId of roots) {
+    walk([rootId], rootId);
+    if (paths.length >= maxFlowCount) {
+      break;
+    }
+  }
+
+  if (paths.length === 0) {
+    const singletonPaths = [...functionNodes]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 25)
+      .map((node) => [node.id]);
+
+    singletonPaths.forEach((path) => addPath(path));
+  }
+
+  return paths
+    .map((nodeIds, index) => {
+      const firstName = nameById.get(nodeIds[0]) ?? nodeIds[0];
+      const lastName = nameById.get(nodeIds[nodeIds.length - 1]) ?? nodeIds[nodeIds.length - 1];
+      const name =
+        nodeIds.length === 1
+          ? firstName
+          : nodeIds.length === 2
+            ? `${firstName} -> ${lastName}`
+            : `${firstName} -> ${lastName} (+${nodeIds.length - 2})`;
+
+      const edgeIds = nodeIds
+        .slice(0, -1)
+        .map((sourceId, edgeIndex) => callEdgeByPair.get(flowPairKey(sourceId, nodeIds[edgeIndex + 1])))
+        .filter((edgeId): edgeId is string => typeof edgeId === 'string');
+
+      return {
+        id: `flow-${index + 1}`,
+        name,
+        nodeIds,
+        edgeIds
+      };
+    })
+    .sort((a, b) => b.nodeIds.length - a.nodeIds.length)
+    .slice(0, 40);
+}
+
+function flowPairKey(sourceId: string, targetId: string): string {
+  return `${sourceId}=>${targetId}`;
 }
 
 function applyLayout(graphData: GraphData, shouldFit: boolean): void {
