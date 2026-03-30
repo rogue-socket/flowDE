@@ -1,0 +1,75 @@
+:root {
+  color-scheme: dark;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at top, #1f2f16 0%, #0e1113 55%, #090a0b 100%);
+  color: #f1f4ef;
+}
+
+.shell {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  width: 100%;
+  height: 100%;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(207, 225, 185, 0.25);
+  background: rgba(9, 12, 11, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.title-group h1 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.4px;
+}
+
+#subtitle {
+  margin: 2px 0 0;
+  color: #a8c99a;
+  font-size: 12px;
+}
+
+.toolbar-actions button {
+  appearance: none;
+  border: 1px solid #84a98c;
+  border-radius: 6px;
+  background: #2f5233;
+  color: #f0f5ec;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.toolbar-actions button:hover {
+  background: #3b6340;
+}
+
+.toolbar-actions button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.status-row {
+  border-bottom: 1px solid rgba(185, 209, 176, 0.2);
+  padding: 8px 14px;
+  font-size: 12px;
+  color: #dbe6d4;
+  background: rgba(14, 20, 16, 0.5);
+}
+
+#graph-canvas {
+  width: 100%;
+  height: 100%;
+}
