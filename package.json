@@ -11,9 +11,6 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "onCommand:flowde.openGraphView"
-  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [

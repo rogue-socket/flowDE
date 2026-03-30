@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { PythonWorkspaceGraphBuilder } from './graph/pythonGraphBuilder';
+import { PythonWorkspaceGraphBuilder } from './graph/workspaceGraphBuilder';
 import { GraphData, GraphNode } from './graph/schema';
 
 type IncomingWebviewMessage =

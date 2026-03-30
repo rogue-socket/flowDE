@@ -30,6 +30,14 @@ interface GraphData {
     workspaceName: string;
     generatedAt: string;
     fileCount: number;
+    engineVersion: string;
+    diagnostics: {
+      resolvedCalls: number;
+      unresolvedCalls: number;
+      ambiguousCalls: number;
+      parserCacheHits: number;
+      parserCacheMisses: number;
+    };
     parseWarnings: string[];
   };
 }
@@ -225,7 +233,15 @@ function renderGraph(graphData: GraphData): void {
       ? ` | warnings: ${graphData.meta.parseWarnings.length}`
       : '';
 
-  statusText.textContent = `Workspace ${graphData.meta.workspaceName}: ${graphData.nodes.length} nodes, ${graphData.edges.length} edges from ${graphData.meta.fileCount} Python files${warningSuffix}`;
+  const diagnostics = graphData.meta.diagnostics;
+  const relationSuffix = ` | calls resolved: ${diagnostics.resolvedCalls}, unresolved: ${diagnostics.unresolvedCalls}, ambiguous: ${diagnostics.ambiguousCalls}`;
+  const cacheTotal = diagnostics.parserCacheHits + diagnostics.parserCacheMisses;
+  const cacheSuffix =
+    cacheTotal > 0
+      ? ` | cache hit: ${diagnostics.parserCacheHits}/${cacheTotal}`
+      : '';
+
+  statusText.textContent = `Workspace ${graphData.meta.workspaceName}: ${graphData.nodes.length} nodes, ${graphData.edges.length} edges from ${graphData.meta.fileCount} Python files${warningSuffix}${relationSuffix}${cacheSuffix}`;
 }
 
 function applyLayout(graphData: GraphData): void {

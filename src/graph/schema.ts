@@ -1,5 +1,28 @@
 export type GraphNodeType = 'function' | 'variable' | 'module';
 export type GraphEdgeType = 'call' | 'dependency' | 'contains';
+export type GraphEdgeProvenance = 'containment' | 'ast' | 'import-map' | 'heuristic';
+
+export interface GraphNodeMetadata {
+  moduleNodeId?: string;
+  external?: boolean;
+  unresolved?: boolean;
+  [key: string]: unknown;
+}
+
+export interface GraphEdgeMetadata {
+  confidence?: number;
+  provenance?: GraphEdgeProvenance;
+  reason?: string;
+  [key: string]: unknown;
+}
+
+export interface GraphDiagnostics {
+  resolvedCalls: number;
+  unresolvedCalls: number;
+  ambiguousCalls: number;
+  parserCacheHits: number;
+  parserCacheMisses: number;
+}
 
 export interface GraphNode {
   id: string;
@@ -8,7 +31,7 @@ export interface GraphNode {
   filePath?: string;
   line?: number;
   moduleName?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: GraphNodeMetadata;
 }
 
 export interface GraphEdge {
@@ -16,7 +39,7 @@ export interface GraphEdge {
   source: string;
   target: string;
   type: GraphEdgeType;
-  metadata?: Record<string, unknown>;
+  metadata?: GraphEdgeMetadata;
 }
 
 export interface GraphData {
@@ -26,6 +49,8 @@ export interface GraphData {
     workspaceName: string;
     generatedAt: string;
     fileCount: number;
+    engineVersion: string;
+    diagnostics: GraphDiagnostics;
     parseWarnings: string[];
   };
 }

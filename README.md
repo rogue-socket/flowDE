@@ -33,17 +33,20 @@ Responsibilities:
 - Handles navigation events from webview
 - Watches Python file changes and refreshes graph
 
-### 2. Parsing + Graph Builder
+### 2. Semantic Graph Engine
 
-Location: `src/graph/pythonGraphBuilder.ts`
+Locations:
 
-Responsibilities:
+- `src/graph/pythonWorkspaceIndexer.ts`
+- `src/graph/pythonRelationResolver.ts`
+- `src/graph/workspaceGraphBuilder.ts`
+- `src/graph/workspaceGraphCache.ts`
 
-- Scans workspace Python files
-- Extracts function definitions and call references
-- Extracts import dependencies
-- Builds an extensible graph schema (`nodes`, `edges`, `meta`)
-- Gracefully accumulates parse warnings instead of crashing
+Pipeline:
+
+1. Indexer: parses Python files into module/function/import/call artifacts
+2. Resolver: resolves cross-file relations with confidence + provenance
+3. Builder: assembles graph nodes/edges and meta diagnostics
 
 Graph schema: `src/graph/schema.ts`
 
@@ -81,8 +84,12 @@ Bi-directional message types:
 │   └── styles.css
 ├── src/
 │   ├── graph/
-│   │   ├── pythonGraphBuilder.ts
-│   │   └── schema.ts
+│   │   ├── pythonRelationResolver.ts
+│   │   ├── pythonWorkspaceIndexer.ts
+│   │   ├── schema.ts
+│   │   ├── semanticTypes.ts
+│   │   ├── workspaceGraphBuilder.ts
+│   │   └── workspaceGraphCache.ts
 │   ├── webview/
 │   │   └── main.ts
 │   └── extension.ts
@@ -139,14 +146,13 @@ Performance check:
 - Test with 20-50 Python files
 - Verify graph loads in a reasonable time on refresh
 
-## Notes on Parsing Reliability
+## Notes on Semantic Reliability
 
-Python is dynamic, so this MVP parser intentionally prioritizes resilience over perfect precision.
+Python is dynamic, so the semantic engine prioritizes traceable confidence over false certainty.
 
-- It tolerates imperfect code by returning partial graphs
-- It uses import-aware call resolution (`import x as y`, `from a import b`) to improve cross-file linking
-- It adds module containment edges so function nodes remain structurally connected
-- It reports parse issues through warning metadata
-- Ambiguous call targets are skipped rather than guessed
+- Every call edge includes provenance (`import-map`, `ast`, `heuristic`) and confidence
+- Resolver reports unresolved vs ambiguous calls in graph diagnostics
+- Indexer uses incremental cache (file mtime + size) for faster refreshes
+- Parser failures degrade gracefully into partial module graphs with warnings
 
-This keeps the graph trustworthy and extensible for future improvements.
+This keeps graph evolution measurable while enabling future LSP/runtime enrichment.
