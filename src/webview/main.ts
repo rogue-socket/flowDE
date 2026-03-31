@@ -1229,12 +1229,15 @@ function buildFlowDefinitions(graphData: GraphData, filters: FlowFilters): FlowD
   }
 
   const functionIds = new Set(functionNodes.map((node) => node.id));
-  const adjacency = new Map<string, Set<string>>();
+  const functionIdList = [...functionIds];
+  const adjacencySets = new Map<string, Set<string>>();
+  const reverseAdjacencySets = new Map<string, Set<string>>();
   const indegree = new Map<string, number>();
   const outdegree = new Map<string, number>();
 
   for (const functionNode of functionNodes) {
-    adjacency.set(functionNode.id, new Set<string>());
+    adjacencySets.set(functionNode.id, new Set<string>());
+    reverseAdjacencySets.set(functionNode.id, new Set<string>());
     indegree.set(functionNode.id, 0);
     outdegree.set(functionNode.id, 0);
   }
@@ -1248,11 +1251,19 @@ function buildFlowDefinitions(graphData: GraphData, filters: FlowFilters): FlowD
       continue;
     }
 
-    adjacency.get(edge.source)?.add(edge.target);
+    adjacencySets.get(edge.source)?.add(edge.target);
+    reverseAdjacencySets.get(edge.target)?.add(edge.source);
+  }
+
+  const adjacency = new Map<string, string[]>();
+  const reverseAdjacency = new Map<string, string[]>();
+  for (const nodeId of functionIdList) {
+    adjacency.set(nodeId, [...(adjacencySets.get(nodeId) ?? [])]);
+    reverseAdjacency.set(nodeId, [...(reverseAdjacencySets.get(nodeId) ?? [])]);
   }
 
   for (const [sourceId, targets] of adjacency.entries()) {
-    outdegree.set(sourceId, targets.size);
+    outdegree.set(sourceId, targets.length);
 
     for (const targetId of targets) {
       indegree.set(targetId, (indegree.get(targetId) ?? 0) + 1);
@@ -1260,21 +1271,34 @@ function buildFlowDefinitions(graphData: GraphData, filters: FlowFilters): FlowD
   }
 
   const nameById = new Map(functionNodes.map((node) => [node.id, node.name]));
-  const sortedRoots = [...functionIds]
-    .filter((id) => (outdegree.get(id) ?? 0) > 0 && (indegree.get(id) ?? 0) === 0)
-    .sort((a, b) => (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b));
-
-  const fallbackRoots = [...functionIds]
-    .filter((id) => (outdegree.get(id) ?? 0) > 0)
-    .sort((a, b) => (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b));
-
-  const roots = sortedRoots.length > 0 ? sortedRoots : fallbackRoots;
-  const maxFlowDepth = 10;
-  const maxFlowCount = 80;
+  const maxFlowDepth = 14;
+  const maxFlowCount = 220;
+  const maxPathsPerStart = 36;
+  const maxStartsPerComponent = 8;
+  const maxBranchesPerHop = 6;
   const pathSignatures = new Set<string>();
   const paths: string[][] = [];
+  const componentList = computeWeaklyConnectedComponents(functionIdList, adjacency, reverseAdjacency)
+    .filter((component) => component.some((nodeId) => (outdegree.get(nodeId) ?? 0) > 0));
+
+  if (componentList.length === 0) {
+    return functionNodes
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 25)
+      .map((node, index) => ({
+        id: `flow-${index + 1}`,
+        name: node.name,
+        nodeIds: [node.id],
+        edgeIds: []
+      }))
+      .filter((flow) => flow.nodeIds.length >= filters.minSteps);
+  }
 
   const addPath = (path: string[]): void => {
+    if (path.length === 0 || paths.length >= maxFlowCount) {
+      return;
+    }
+
     const signature = path.join('>');
     if (pathSignatures.has(signature)) {
       return;
@@ -1282,39 +1306,110 @@ function buildFlowDefinitions(graphData: GraphData, filters: FlowFilters): FlowD
 
     pathSignatures.add(signature);
     paths.push(path);
+
+    if (path.length >= 4 && paths.length < maxFlowCount) {
+      // Capture meaningful sub-flows from long traces so mid-graph behavior is discoverable.
+      for (let start = 1; start <= path.length - 3; start += 1) {
+        const subpath = path.slice(start);
+        const subSignature = subpath.join('>');
+        if (!pathSignatures.has(subSignature)) {
+          pathSignatures.add(subSignature);
+          paths.push(subpath);
+          if (paths.length >= maxFlowCount) {
+            break;
+          }
+        }
+      }
+    }
   };
 
-  const walk = (path: string[], currentId: string): void => {
+  const walk = (
+    componentNodes: Set<string>,
+    startId: string,
+    path: string[],
+    currentId: string,
+    visited: Set<string>,
+    budget: { count: number }
+  ): void => {
+    if (budget.count >= maxPathsPerStart) {
+      return;
+    }
+
     if (paths.length >= maxFlowCount) {
       return;
     }
 
-    const nextCandidates = [...(adjacency.get(currentId) ?? [])].filter(
-      (candidate) => !path.includes(candidate)
-    );
+    const nextCandidates = prioritizeFlowCandidates(
+      (adjacency.get(currentId) ?? []).filter((candidate) => componentNodes.has(candidate)),
+      outdegree,
+      indegree,
+      nameById
+    ).slice(0, maxBranchesPerHop);
 
     if (nextCandidates.length === 0 || path.length >= maxFlowDepth) {
       addPath(path);
+      budget.count += 1;
       return;
     }
 
-    nextCandidates
-      .sort((a, b) => (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b))
-      .forEach((nextId) => walk([...path, nextId], nextId));
+    let expanded = false;
+    for (const nextId of nextCandidates) {
+      if (visited.has(nextId)) {
+        continue;
+      }
+
+      expanded = true;
+      visited.add(nextId);
+      walk(componentNodes, startId, [...path, nextId], nextId, visited, budget);
+      visited.delete(nextId);
+
+      if (paths.length >= maxFlowCount || budget.count >= maxPathsPerStart) {
+        return;
+      }
+    }
+
+    if (!expanded) {
+      addPath(path);
+      budget.count += 1;
+    }
   };
 
-  for (const rootId of roots) {
-    walk([rootId], rootId);
+  for (const component of componentList) {
+    const componentNodeSet = new Set(component);
+    const starts = chooseFlowStarts(component, indegree, outdegree, nameById).slice(0, maxStartsPerComponent);
+
+    for (const startId of starts) {
+      const budget = { count: 0 };
+      const visited = new Set<string>([startId]);
+      walk(componentNodeSet, startId, [startId], startId, visited, budget);
+      if (paths.length >= maxFlowCount) {
+        break;
+      }
+    }
+
     if (paths.length >= maxFlowCount) {
       break;
     }
   }
 
+  // Ensure simple direct flows are always discoverable.
+  for (const edge of callEdges) {
+    if (paths.length >= maxFlowCount) {
+      break;
+    }
+
+    if (!functionIds.has(edge.source) || !functionIds.has(edge.target)) {
+      continue;
+    }
+
+    addPath([edge.source, edge.target]);
+  }
+
   if (paths.length === 0) {
-    const singletonPaths = [...functionNodes]
-      .sort((a, b) => a.name.localeCompare(b.name))
+    const singletonPaths = functionIdList
+      .sort((a, b) => (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b))
       .slice(0, 25)
-      .map((node) => [node.id]);
+      .map((nodeId) => [nodeId]);
 
     singletonPaths.forEach((path) => addPath(path));
   }
@@ -1359,6 +1454,116 @@ function buildFlowDefinitions(graphData: GraphData, filters: FlowFilters): FlowD
     })
     .sort((a, b) => b.nodeIds.length - a.nodeIds.length)
     .slice(0, 40);
+}
+
+function chooseFlowStarts(
+  component: string[],
+  indegree: Map<string, number>,
+  outdegree: Map<string, number>,
+  nameById: Map<string, string>
+): string[] {
+  const keywordRegex = /^(main|run|start|handle|process|execute|dispatch|entry|bootstrap|init|load)/i;
+  const sortedByPriority = [...component].sort((a, b) => {
+    const outDiff = (outdegree.get(b) ?? 0) - (outdegree.get(a) ?? 0);
+    if (outDiff !== 0) {
+      return outDiff;
+    }
+
+    const inDiff = (indegree.get(a) ?? 0) - (indegree.get(b) ?? 0);
+    if (inDiff !== 0) {
+      return inDiff;
+    }
+
+    return (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b);
+  });
+
+  const keywordStarts = sortedByPriority.filter((id) => keywordRegex.test(nameById.get(id) ?? id));
+  const pureEntryStarts = sortedByPriority.filter(
+    (id) => (indegree.get(id) ?? 0) === 0 && (outdegree.get(id) ?? 0) > 0
+  );
+  const fanoutStarts = sortedByPriority.filter((id) => (outdegree.get(id) ?? 0) > 0);
+
+  const result: string[] = [];
+  const appendUnique = (values: string[]): void => {
+    for (const value of values) {
+      if (!result.includes(value)) {
+        result.push(value);
+      }
+    }
+  };
+
+  appendUnique(keywordStarts);
+  appendUnique(pureEntryStarts);
+  appendUnique(fanoutStarts);
+
+  if (result.length === 0 && component.length > 0) {
+    result.push(component[0]);
+  }
+
+  return result;
+}
+
+function prioritizeFlowCandidates(
+  candidates: string[],
+  outdegree: Map<string, number>,
+  indegree: Map<string, number>,
+  nameById: Map<string, string>
+): string[] {
+  return [...candidates].sort((a, b) => {
+    const outDiff = (outdegree.get(b) ?? 0) - (outdegree.get(a) ?? 0);
+    if (outDiff !== 0) {
+      return outDiff;
+    }
+
+    const inDiff = (indegree.get(a) ?? 0) - (indegree.get(b) ?? 0);
+    if (inDiff !== 0) {
+      return inDiff;
+    }
+
+    return (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b);
+  });
+}
+
+function computeWeaklyConnectedComponents(
+  nodes: string[],
+  adjacency: Map<string, string[]>,
+  reverseAdjacency: Map<string, string[]>
+): string[][] {
+  const visited = new Set<string>();
+  const components: string[][] = [];
+
+  for (const node of nodes) {
+    if (visited.has(node)) {
+      continue;
+    }
+
+    const queue = [node];
+    const component: string[] = [];
+    visited.add(node);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+
+      component.push(current);
+      const neighbors = [...(adjacency.get(current) ?? []), ...(reverseAdjacency.get(current) ?? [])];
+
+      for (const neighbor of neighbors) {
+        if (visited.has(neighbor)) {
+          continue;
+        }
+
+        visited.add(neighbor);
+        queue.push(neighbor);
+      }
+    }
+
+    components.push(component);
+  }
+
+  return components;
 }
 
 function flowPairKey(sourceId: string, targetId: string): string {
