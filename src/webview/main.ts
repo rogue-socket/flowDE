@@ -154,6 +154,14 @@ interface DataFlowAnalysisSnapshot {
   transformationCount: number;
 }
 
+type AbstractionLevel = 'system' | 'function' | 'detail';
+
+interface GraphAbstractionState {
+  manualLevel: AbstractionLevel;
+  autoByZoom: boolean;
+  effectiveLevel: AbstractionLevel;
+}
+
 interface ReductionState {
   collapseInternalFunctions: boolean;
   collapseLibraries: boolean;
@@ -199,6 +207,9 @@ const dataFlowHopsValue = getRequiredElement<HTMLElement>('#dataflow-hops-value'
 const dataFlowRunButton = getRequiredElement<HTMLButtonElement>('#dataflow-run-btn');
 const dataFlowClearButton = getRequiredElement<HTMLButtonElement>('#dataflow-clear-btn');
 const dataFlowStatus = getRequiredElement<HTMLElement>('#dataflow-status');
+const abstractionLevelSelect = getRequiredElement<HTMLSelectElement>('#abstraction-level');
+const abstractionAutoToggle = getRequiredElement<HTMLInputElement>('#abstraction-auto');
+const abstractionStatus = getRequiredElement<HTMLElement>('#abstraction-status');
 const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
 const layerStructuralToggle = getRequiredElement<HTMLInputElement>('#layer-structural');
 const layerDependencyToggle = getRequiredElement<HTMLInputElement>('#layer-dependency');
@@ -301,6 +312,11 @@ const dataFlowExplorer: DataFlowExplorerState = {
 };
 
 let latestDataFlowAnalysis: DataFlowAnalysisSnapshot | undefined;
+const graphAbstraction: GraphAbstractionState = {
+  manualLevel: (abstractionLevelSelect.value as AbstractionLevel) || 'function',
+  autoByZoom: abstractionAutoToggle.checked,
+  effectiveLevel: (abstractionLevelSelect.value as AbstractionLevel) || 'function'
+};
 
 const reductionState: ReductionState = {
   collapseInternalFunctions: collapseFunctionsToggle.checked,
@@ -917,6 +933,25 @@ layerExecutionToggle.addEventListener('change', () => {
   rerenderGraphFromSource();
 });
 
+abstractionLevelSelect.addEventListener('change', () => {
+  const level = abstractionLevelSelect.value;
+  if (level === 'system' || level === 'function' || level === 'detail') {
+    graphAbstraction.manualLevel = level;
+  }
+
+  if (!graphAbstraction.autoByZoom) {
+    graphAbstraction.effectiveLevel = graphAbstraction.manualLevel;
+  }
+
+  updateAbstractionStatus();
+  rerenderGraphFromSource();
+});
+
+abstractionAutoToggle.addEventListener('change', () => {
+  graphAbstraction.autoByZoom = abstractionAutoToggle.checked;
+  syncAbstractionLevelFromZoom(true);
+});
+
 executionStartButton.addEventListener('click', () => {
   if (executionTraceRunning) {
     return;
@@ -1084,6 +1119,7 @@ flowPlayButton.addEventListener('click', () => {
 
 graph.on('zoom', () => {
   updateZoomResetLabel();
+  syncAbstractionLevelFromZoom(false);
   scheduleMinimapRender();
 });
 
@@ -1165,6 +1201,9 @@ focusNeighborhood.checked = focusFilters.neighborhoodOnly;
 dependencyDirection.value = dependencyTraversal.direction;
 dependencyHops.value = String(dependencyTraversal.maxHops);
 dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
+abstractionLevelSelect.value = graphAbstraction.manualLevel;
+abstractionAutoToggle.checked = graphAbstraction.autoByZoom;
+syncAbstractionLevelFromZoom(false);
 callPathDepth.value = String(callPathExplorer.maxDepth);
 callPathDepthValue.textContent = String(callPathExplorer.maxDepth);
 dataFlowDirection.value = dataFlowExplorer.direction;
@@ -1271,6 +1310,7 @@ function renderGraph(graphData: GraphData): void {
     .filter((token) => token.length > 0)
     .join('');
   const layerSuffix = ` | layers: ${activeLayers || 'none'}`;
+  const abstractionSuffix = ` | abstraction: ${graphAbstraction.effectiveLevel}`;
   const cacheTotal = diagnostics.parserCacheHits + diagnostics.parserCacheMisses;
   const cacheSuffix =
     cacheTotal > 0
@@ -1278,7 +1318,7 @@ function renderGraph(graphData: GraphData): void {
       : '';
   const warningCompact = graphData.meta.parseWarnings.length > 0 ? ' | warnings' : '';
 
-  statusText.textContent = `${graphData.meta.workspaceName} | ${displayedGraphData.nodes.length} nodes | ${displayedGraphData.edges.length} edges${relationSuffix}${modelSuffix}${layerSuffix}${cacheSuffix}${warningCompact}`;
+  statusText.textContent = `${graphData.meta.workspaceName} | ${displayedGraphData.nodes.length} nodes | ${displayedGraphData.edges.length} edges${relationSuffix}${modelSuffix}${layerSuffix}${abstractionSuffix}${cacheSuffix}${warningCompact}`;
 }
 
 function renderFlowSidebar(): void {
@@ -1803,6 +1843,38 @@ function rerenderGraphFromSource(): void {
   renderGraph(latestGraphData);
 }
 
+function resolveAbstractionLevelForZoom(zoom: number): AbstractionLevel {
+  if (zoom < 0.56) {
+    return 'system';
+  }
+
+  if (zoom < 1.18) {
+    return 'function';
+  }
+
+  return 'detail';
+}
+
+function updateAbstractionStatus(): void {
+  const mode = graphAbstraction.autoByZoom ? 'auto' : 'manual';
+  abstractionStatus.textContent = `${mode} | level: ${graphAbstraction.effectiveLevel}`;
+}
+
+function syncAbstractionLevelFromZoom(forceRender: boolean): void {
+  const previous = graphAbstraction.effectiveLevel;
+  const nextLevel = graphAbstraction.autoByZoom
+    ? resolveAbstractionLevelForZoom(graph.zoom())
+    : graphAbstraction.manualLevel;
+
+  graphAbstraction.effectiveLevel = nextLevel;
+  abstractionLevelSelect.value = nextLevel;
+  updateAbstractionStatus();
+
+  if (forceRender || previous !== nextLevel) {
+    rerenderGraphFromSource();
+  }
+}
+
 function updateReductionHint(): void {
   if (!reductionState.collapseInternalFunctions && !reductionState.collapseLibraries) {
     reductionHint.textContent = 'Reduction off: full graph shown.';
@@ -1857,9 +1929,10 @@ function toggleReductionExpansion(nodeId: string): boolean {
 
 function buildDisplayedGraphData(source: GraphData): GraphData {
   const layerFiltered = buildLayerFilteredGraphData(source);
-  const sourceNodesById = new Map(layerFiltered.nodes.map((node) => [node.id, node]));
-  const functionNodes = layerFiltered.nodes.filter((node) => node.type === 'function');
-  const moduleNodes = layerFiltered.nodes.filter((node) => node.type === 'module');
+  const abstractionFiltered = buildAbstractionFilteredGraphData(layerFiltered);
+  const sourceNodesById = new Map(abstractionFiltered.nodes.map((node) => [node.id, node]));
+  const functionNodes = abstractionFiltered.nodes.filter((node) => node.type === 'function');
+  const moduleNodes = abstractionFiltered.nodes.filter((node) => node.type === 'module');
   const externalModuleIds = new Set(
     moduleNodes.filter((node) => node.metadata?.external).map((node) => node.id)
   );
@@ -1894,7 +1967,7 @@ function buildDisplayedGraphData(source: GraphData): GraphData {
 
   const visibleNodes: GraphNode[] = [];
 
-  for (const node of layerFiltered.nodes) {
+  for (const node of abstractionFiltered.nodes) {
     if (hiddenFunctionIds.has(node.id)) {
       continue;
     }
@@ -1920,7 +1993,7 @@ function buildDisplayedGraphData(source: GraphData): GraphData {
   const aggregatedLibraryDeps = new Map<string, number>();
   const visibleEdges: GraphEdge[] = [];
 
-  for (const edge of layerFiltered.edges) {
+  for (const edge of abstractionFiltered.edges) {
     const sourceHiddenFunction = hiddenFunctionIds.has(edge.source);
     const targetHiddenFunction = hiddenFunctionIds.has(edge.target);
     const sourceHiddenExternal = hiddenExternalModuleIds.has(edge.source);
@@ -2052,6 +2125,114 @@ function buildLayerFilteredGraphData(source: GraphData): GraphData {
     nodes,
     edges
   };
+}
+
+function buildAbstractionFilteredGraphData(source: GraphData): GraphData {
+  const level = graphAbstraction.effectiveLevel;
+  if (level === 'detail') {
+    return source;
+  }
+
+  const allowedTypes =
+    level === 'system'
+      ? new Set<GraphNodeType>(['module'])
+      : new Set<GraphNodeType>(['module', 'class', 'function']);
+
+  const nodeById = new Map(source.nodes.map((node) => [node.id, node]));
+  const visibleNodes = source.nodes.filter((node) => allowedTypes.has(node.type));
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
+
+  const visibleEdges: GraphEdge[] = [];
+  const aggregatedEdges = new Map<string, { source: string; target: string; type: GraphEdgeType; layer: GraphLayer; count: number }>();
+
+  for (const edge of source.edges) {
+    const sourceVisible = visibleNodeIds.has(edge.source);
+    const targetVisible = visibleNodeIds.has(edge.target);
+
+    if (sourceVisible && targetVisible) {
+      visibleEdges.push(edge);
+      continue;
+    }
+
+    const sourceAnchor = resolveAbstractionAnchor(nodeById.get(edge.source), level);
+    const targetAnchor = resolveAbstractionAnchor(nodeById.get(edge.target), level);
+
+    if (!sourceAnchor || !targetAnchor || sourceAnchor === targetAnchor) {
+      continue;
+    }
+
+    if (!visibleNodeIds.has(sourceAnchor) || !visibleNodeIds.has(targetAnchor)) {
+      continue;
+    }
+
+    const aggregateType: GraphEdgeType = edge.type === 'dataflow' ? 'dataflow' : 'call';
+    const aggregateLayer: GraphLayer = edge.type === 'dataflow' ? 'dataflow' : 'dependency';
+    const key = `${aggregateType}:${sourceAnchor}->${targetAnchor}`;
+    const existing = aggregatedEdges.get(key);
+
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+
+    aggregatedEdges.set(key, {
+      source: sourceAnchor,
+      target: targetAnchor,
+      type: aggregateType,
+      layer: aggregateLayer,
+      count: 1
+    });
+  }
+
+  for (const [key, aggregate] of aggregatedEdges.entries()) {
+    visibleEdges.push({
+      id: `edge:abstraction:${key}`,
+      source: aggregate.source,
+      target: aggregate.target,
+      type: aggregate.type,
+      layer: aggregate.layer,
+      metadata: {
+        reduced: true,
+        abstractionAggregate: true,
+        aggregateCount: aggregate.count,
+        confidence: 0.58,
+        provenance: 'heuristic',
+        reason: `${aggregate.count} relation${aggregate.count === 1 ? '' : 's'} aggregated at ${level} level.`
+      }
+    });
+  }
+
+  return {
+    ...source,
+    nodes: visibleNodes,
+    edges: visibleEdges
+  };
+}
+
+function resolveAbstractionAnchor(node: GraphNode | undefined, level: AbstractionLevel): string | undefined {
+  if (!node) {
+    return undefined;
+  }
+
+  if (level === 'system') {
+    if (node.type === 'module') {
+      return node.id;
+    }
+
+    return getModuleNodeId(node);
+  }
+
+  if (level === 'function') {
+    if (node.type === 'module' || node.type === 'class' || node.type === 'function') {
+      return node.id;
+    }
+
+    if (node.type === 'variable') {
+      return getFunctionNodeId(node) ?? getModuleNodeId(node);
+    }
+  }
+
+  return node.id;
 }
 
 function applyFlowFilters(): void {

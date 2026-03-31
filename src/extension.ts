@@ -1205,6 +1205,22 @@ class FlowDEPanel implements vscode.Disposable {
               <span>Execution</span>
             </label>
           </div>
+          <div class="abstraction-panel" aria-label="Graph abstraction controls">
+            <h3>Abstraction</h3>
+            <label class="focus-control">
+              <span>Level</span>
+              <select id="abstraction-level">
+                <option value="system">System (modules)</option>
+                <option value="function" selected>Function (modules + functions)</option>
+                <option value="detail">Detail (modules + functions + variables)</option>
+              </select>
+            </label>
+            <label class="focus-toggle">
+              <input id="abstraction-auto" type="checkbox" checked />
+              <span>Auto by zoom</span>
+            </label>
+            <p id="abstraction-status" class="abstraction-status">Auto mode: Function level.</p>
+          </div>
           <div class="reduction-panel" aria-label="Smart graph reduction">
             <h3>Smart Reduction</h3>
             <label class="focus-toggle">

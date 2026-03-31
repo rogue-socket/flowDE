@@ -118,6 +118,7 @@ body {
 .node-inspector-panel,
 .reduction-panel,
 .layer-panel,
+.abstraction-panel,
 .execution-panel,
 .call-path-panel,
 .dataflow-panel {
@@ -133,6 +134,7 @@ body {
 .node-inspector-panel h3,
 .reduction-panel h3,
 .layer-panel h3,
+.abstraction-panel h3,
 .execution-panel h3,
 .call-path-panel h3,
 .dataflow-panel h3 {
@@ -380,6 +382,18 @@ body {
 }
 
 .dependency-status {
+  margin: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-bg) 88%, black 5%);
+  color: var(--muted-fg);
+  font-size: 10px;
+  line-height: 1.45;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
+.abstraction-status {
   margin: 0;
   border: 1px solid var(--panel-border);
   border-radius: 6px;
