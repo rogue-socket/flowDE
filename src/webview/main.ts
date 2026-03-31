@@ -534,15 +534,6 @@ const graph = cytoscape({
       }
     },
     {
-      selector: 'node.trail-node',
-      style: {
-        'border-width': 2,
-        'border-color': '#8ecae6',
-        opacity: 1,
-        'text-opacity': 1
-      }
-    },
-    {
       selector: 'node.execution-visited',
       style: {
         'border-width': 2,
@@ -678,15 +669,6 @@ const graph = cytoscape({
       }
     },
     {
-      selector: 'edge.trail-edge',
-      style: {
-        width: 2.2,
-        opacity: 0.95,
-        'line-color': '#8ecae6',
-        'target-arrow-color': '#8ecae6'
-      }
-    },
-    {
       selector: 'edge.execution-traversed',
       style: {
         width: 3.1,
@@ -751,8 +733,8 @@ const graph = cytoscape({
       selector: 'node.trail-node',
       style: {
         'border-width': 3,
-        'border-color': '#ffb703',
-        'overlay-color': '#ffb703',
+        'border-color': '#ef233c',
+        'overlay-color': '#ef233c',
         'overlay-opacity': 0.08,
         opacity: 1,
         'text-opacity': 1
@@ -762,8 +744,8 @@ const graph = cytoscape({
       selector: 'node.trail-head',
       style: {
         'border-width': 4,
-        'border-color': '#fb5607',
-        'overlay-color': '#fb5607',
+        'border-color': '#ff006e',
+        'overlay-color': '#ff006e',
         'overlay-opacity': 0.12
       }
     },
@@ -772,8 +754,8 @@ const graph = cytoscape({
       style: {
         width: 3.2,
         opacity: 1,
-        'line-color': '#ffb703',
-        'target-arrow-color': '#ffb703',
+        'line-color': '#ef233c',
+        'target-arrow-color': '#ef233c',
         'line-style': 'solid'
       }
     },
@@ -782,8 +764,8 @@ const graph = cytoscape({
       style: {
         width: 4,
         opacity: 1,
-        'line-color': '#fb5607',
-        'target-arrow-color': '#fb5607'
+        'line-color': '#ff006e',
+        'target-arrow-color': '#ff006e'
       }
     }
   ]
@@ -2236,14 +2218,57 @@ function updateDrillTrailStatus(): void {
   });
 }
 
-function resolveTrailEdgeId(sourceNodeId: string, targetNodeId: string): string | undefined {
-  const direct = anyEdgeByPair.get(flowPairKey(sourceNodeId, targetNodeId));
-  if (direct) {
-    return direct;
+function getTrailEdgePriority(edgeType: GraphEdgeType): number {
+  if (edgeType === 'call') {
+    return 5;
   }
+  if (edgeType === 'dependency') {
+    return 4;
+  }
+  if (edgeType === 'dataflow') {
+    return 3;
+  }
+  if (edgeType === 'class-usage') {
+    return 2;
+  }
+  if (edgeType === 'execution-path') {
+    return 1;
+  }
+  return 0;
+}
 
-  const reverse = anyEdgeByPair.get(flowPairKey(targetNodeId, sourceNodeId));
-  return reverse;
+function resolveTrailEdgeId(sourceNodeId: string, targetNodeId: string): string | undefined {
+  let bestEdgeId: string | undefined;
+  let bestScore = -1;
+
+  graph.edges().forEach((edge) => {
+    const sourceId = edge.source().id();
+    const targetId = edge.target().id();
+    const isCandidate =
+      (sourceId === sourceNodeId && targetId === targetNodeId) ||
+      (sourceId === targetNodeId && targetId === sourceNodeId);
+    if (!isCandidate) {
+      return;
+    }
+
+    if (!isDependencyTraversableEdge(edge)) {
+      return;
+    }
+
+    const edgeId = edge.id();
+    const edgeMeta = edgeCatalog.get(edgeId);
+    if (!edgeMeta) {
+      return;
+    }
+
+    const score = getTrailEdgePriority(edgeMeta.type) * 10 + getEdgeConfidence(edgeMeta);
+    if (score > bestScore) {
+      bestScore = score;
+      bestEdgeId = edgeId;
+    }
+  });
+
+  return bestEdgeId;
 }
 
 function recordDrillSelection(previousNodeId: string | undefined, currentNodeId: string): void {
