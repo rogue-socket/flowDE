@@ -1168,6 +1168,22 @@ class FlowDEPanel implements vscode.Disposable {
               <input id="focus-neighborhood" type="checkbox" />
               <span>Neighborhood only</span>
             </label>
+            <label class="focus-control">
+              <span>Dependency traversal</span>
+              <select id="dependency-direction">
+                <option value="both" selected>Upstream + downstream</option>
+                <option value="upstream">Upstream only</option>
+                <option value="downstream">Downstream only</option>
+              </select>
+            </label>
+            <label class="focus-control">
+              <span>Hop depth</span>
+              <div class="focus-slider-row">
+                <input id="dependency-hops" type="range" min="1" max="8" step="1" value="3" />
+                <span id="dependency-hops-value">3</span>
+              </div>
+            </label>
+            <p id="dependency-status" class="dependency-status">Select a node to analyze dependency impact.</p>
             <button id="focus-clear-btn" type="button">Clear focus</button>
           </div>
           <div class="layer-panel" aria-label="Graph layer controls">

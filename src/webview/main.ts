@@ -115,6 +115,21 @@ interface FocusFilters {
   neighborhoodOnly: boolean;
 }
 
+type DependencyDirection = 'upstream' | 'downstream' | 'both';
+
+interface DependencyTraversalState {
+  direction: DependencyDirection;
+  maxHops: number;
+}
+
+interface DependencyAnalysisSnapshot {
+  upstreamNodeIds: Set<string>;
+  downstreamNodeIds: Set<string>;
+  upstreamEdgeIds: Set<string>;
+  downstreamEdgeIds: Set<string>;
+  blastRadiusNodeCount: number;
+}
+
 interface ReductionState {
   collapseInternalFunctions: boolean;
   collapseLibraries: boolean;
@@ -143,6 +158,10 @@ const statusText = getRequiredElement<HTMLElement>('#status');
 const flowMeta = getRequiredElement<HTMLElement>('#flow-meta');
 const focusFile = getRequiredElement<HTMLSelectElement>('#focus-file');
 const focusNeighborhood = getRequiredElement<HTMLInputElement>('#focus-neighborhood');
+const dependencyDirection = getRequiredElement<HTMLSelectElement>('#dependency-direction');
+const dependencyHops = getRequiredElement<HTMLInputElement>('#dependency-hops');
+const dependencyHopsValue = getRequiredElement<HTMLElement>('#dependency-hops-value');
+const dependencyStatus = getRequiredElement<HTMLElement>('#dependency-status');
 const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
 const layerStructuralToggle = getRequiredElement<HTMLInputElement>('#layer-structural');
 const layerDependencyToggle = getRequiredElement<HTMLInputElement>('#layer-dependency');
@@ -224,6 +243,13 @@ const focusFilters: FocusFilters = {
   moduleNodeId: 'all',
   neighborhoodOnly: false
 };
+
+const dependencyTraversal: DependencyTraversalState = {
+  direction: (dependencyDirection.value as DependencyDirection) || 'both',
+  maxHops: Number.parseInt(dependencyHops.value, 10) || 3
+};
+
+let latestDependencyAnalysis: DependencyAnalysisSnapshot | undefined;
 
 const reductionState: ReductionState = {
   collapseInternalFunctions: collapseFunctionsToggle.checked,
@@ -328,6 +354,15 @@ const graph = cytoscape({
       style: {
         'border-width': 2,
         'border-color': '#f4a261',
+        opacity: 1,
+        'text-opacity': 1
+      }
+    },
+    {
+      selector: 'node.node-impact',
+      style: {
+        'border-width': 3,
+        'border-color': '#ff4d6d',
         opacity: 1,
         'text-opacity': 1
       }
@@ -441,6 +476,15 @@ const graph = cytoscape({
         opacity: 1,
         'line-color': '#f4a261',
         'target-arrow-color': '#f4a261'
+      }
+    },
+    {
+      selector: 'edge.edge-impact',
+      style: {
+        width: 3,
+        opacity: 1,
+        'line-color': '#ff4d6d',
+        'target-arrow-color': '#ff4d6d'
       }
     },
     {
@@ -669,6 +713,21 @@ focusFile.addEventListener('change', () => {
 
 focusNeighborhood.addEventListener('change', () => {
   focusFilters.neighborhoodOnly = focusNeighborhood.checked;
+  applyFlowHighlighting();
+});
+
+dependencyDirection.addEventListener('change', () => {
+  const value = dependencyDirection.value;
+  if (value === 'upstream' || value === 'downstream' || value === 'both') {
+    dependencyTraversal.direction = value;
+  }
+  applyFlowHighlighting();
+});
+
+dependencyHops.addEventListener('input', () => {
+  const value = Number.parseInt(dependencyHops.value, 10);
+  dependencyTraversal.maxHops = Number.isFinite(value) ? clamp(value, 1, 8) : 3;
+  dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
   applyFlowHighlighting();
 });
 
@@ -946,6 +1005,9 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
 
 updateZoomResetLabel();
 focusNeighborhood.checked = focusFilters.neighborhoodOnly;
+dependencyDirection.value = dependencyTraversal.direction;
+dependencyHops.value = String(dependencyTraversal.maxHops);
+dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
 layerStructuralToggle.checked = layerVisibility.structural;
 layerDependencyToggle.checked = layerVisibility.dependency;
 layerDataFlowToggle.checked = layerVisibility.dataflow;
@@ -1132,7 +1194,7 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
 
 function applyFlowHighlighting(): void {
   graph.elements().removeClass(
-    'dimmed flow-node flow-edge flow-current flow-current-edge node-selected node-incoming node-outgoing edge-incoming edge-outgoing execution-visited execution-active execution-traversed'
+    'dimmed flow-node flow-edge flow-current flow-current-edge node-selected node-incoming node-outgoing node-impact edge-incoming edge-outgoing edge-impact execution-visited execution-active execution-traversed'
   );
 
   const activeFlow = getSelectedFlow();
@@ -2001,37 +2063,71 @@ function applyFocusFilters(): void {
 }
 
 function applyDependencyHighlighting(): void {
-  updateNodeInspector();
-
   if (!selectedNodeId) {
+    latestDependencyAnalysis = undefined;
+    dependencyStatus.textContent = 'Select a node to analyze dependency impact.';
+    updateNodeInspector();
     return;
   }
 
   const selectedNode = graph.getElementById(selectedNodeId);
   if (selectedNode.length === 0) {
+    latestDependencyAnalysis = undefined;
+    dependencyStatus.textContent = 'Selected node is not visible in the current graph filters.';
+    updateNodeInspector();
     return;
   }
 
   selectedNode.addClass('node-selected');
 
-  const incomingEdges = selectedNode.incomers('edge');
-  const outgoingEdges = selectedNode.outgoers('edge');
-  const incomingNodes = incomingEdges.sources();
-  const outgoingNodes = outgoingEdges.targets();
+  const analysis = analyzeDependencyTraversal(selectedNodeId, dependencyTraversal.maxHops);
+  latestDependencyAnalysis = analysis;
 
-  incomingEdges.addClass('edge-incoming');
-  outgoingEdges.addClass('edge-outgoing');
-  incomingNodes.addClass('node-incoming');
-  outgoingNodes.addClass('node-outgoing');
+  const showUpstream = dependencyTraversal.direction !== 'downstream';
+  const showDownstream = dependencyTraversal.direction !== 'upstream';
+
+  if (showUpstream) {
+    for (const nodeId of analysis.upstreamNodeIds) {
+      graph.getElementById(nodeId).addClass('node-incoming').removeClass('dimmed');
+    }
+    for (const edgeId of analysis.upstreamEdgeIds) {
+      graph.getElementById(edgeId).addClass('edge-incoming').removeClass('dimmed');
+    }
+  }
+
+  if (showDownstream) {
+    for (const nodeId of analysis.downstreamNodeIds) {
+      graph.getElementById(nodeId).addClass('node-outgoing').removeClass('dimmed');
+    }
+    for (const edgeId of analysis.downstreamEdgeIds) {
+      graph.getElementById(edgeId).addClass('edge-outgoing').removeClass('dimmed');
+    }
+  }
+
+  // Impact analysis is always based on transitive upstream dependents.
+  for (const nodeId of analysis.upstreamNodeIds) {
+    graph.getElementById(nodeId).addClass('node-impact').removeClass('dimmed');
+  }
+  for (const edgeId of analysis.upstreamEdgeIds) {
+    graph.getElementById(edgeId).addClass('edge-impact').removeClass('dimmed');
+  }
+
+  dependencyStatus.textContent = [
+    `Traversal: ${dependencyTraversal.direction}, hops <= ${dependencyTraversal.maxHops}`,
+    `Upstream dependents: ${analysis.upstreamNodeIds.size}`,
+    `Downstream dependencies: ${analysis.downstreamNodeIds.size}`,
+    `Blast radius: ${analysis.blastRadiusNodeCount} node${analysis.blastRadiusNodeCount === 1 ? '' : 's'}`
+  ].join('\n');
 
   if (!focusFilters.neighborhoodOnly) {
+    updateNodeInspector();
     return;
   }
 
   const neighborhoodNodeIds = new Set<string>([
     selectedNodeId,
-    ...incomingNodes.map((node) => node.id()),
-    ...outgoingNodes.map((node) => node.id())
+    ...analysis.upstreamNodeIds,
+    ...analysis.downstreamNodeIds
   ]);
 
   const selectedNodeMeta = nodeCatalog.get(selectedNodeId);
@@ -2041,8 +2137,8 @@ function applyDependencyHighlighting(): void {
   }
 
   const neighborhoodEdgeIds = new Set<string>([
-    ...incomingEdges.map((edge) => edge.id()),
-    ...outgoingEdges.map((edge) => edge.id())
+    ...analysis.upstreamEdgeIds,
+    ...analysis.downstreamEdgeIds
   ]);
 
   graph.nodes().forEach((node) => {
@@ -2056,6 +2152,87 @@ function applyDependencyHighlighting(): void {
       edge.addClass('dimmed');
     }
   });
+
+  updateNodeInspector();
+}
+
+function analyzeDependencyTraversal(
+  rootNodeId: string,
+  maxHops: number
+): DependencyAnalysisSnapshot {
+  const safeMaxHops = clamp(maxHops, 1, 8);
+  const upstreamNodeIds = new Set<string>();
+  const downstreamNodeIds = new Set<string>();
+  const upstreamEdgeIds = new Set<string>();
+  const downstreamEdgeIds = new Set<string>();
+
+  const traverse = (
+    direction: 'upstream' | 'downstream',
+    nodeSet: Set<string>,
+    edgeSet: Set<string>
+  ): void => {
+    const visited = new Set<string>([rootNodeId]);
+    const queue: Array<{ id: string; depth: number }> = [{ id: rootNodeId, depth: 0 }];
+
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (!item) {
+        continue;
+      }
+
+      if (item.depth >= safeMaxHops) {
+        continue;
+      }
+
+      const node = graph.getElementById(item.id);
+      if (node.length === 0) {
+        continue;
+      }
+
+      const edgeCollection = direction === 'upstream' ? node.incomers('edge') : node.outgoers('edge');
+      edgeCollection.forEach((edge) => {
+        if (!isDependencyTraversableEdge(edge)) {
+          return;
+        }
+
+        const nextNodeId = direction === 'upstream' ? edge.source().id() : edge.target().id();
+        if (!nextNodeId) {
+          return;
+        }
+
+        edgeSet.add(edge.id());
+
+        if (visited.has(nextNodeId)) {
+          return;
+        }
+
+        visited.add(nextNodeId);
+        nodeSet.add(nextNodeId);
+        queue.push({ id: nextNodeId, depth: item.depth + 1 });
+      });
+    }
+  };
+
+  traverse('upstream', upstreamNodeIds, upstreamEdgeIds);
+  traverse('downstream', downstreamNodeIds, downstreamEdgeIds);
+
+  return {
+    upstreamNodeIds,
+    downstreamNodeIds,
+    upstreamEdgeIds,
+    downstreamEdgeIds,
+    blastRadiusNodeCount: upstreamNodeIds.size
+  };
+}
+
+function isDependencyTraversableEdge(edge: cytoscape.EdgeSingular): boolean {
+  const edgeType = String(edge.data('type'));
+  return (
+    edgeType === 'call' ||
+    edgeType === 'dependency' ||
+    edgeType === 'class-usage' ||
+    edgeType === 'dataflow'
+  );
 }
 
 function openNodeSource(nodeId: string): void {
@@ -2094,6 +2271,12 @@ function updateNodeInspector(): void {
     `Incoming: ${incomingCount}`,
     `Outgoing: ${outgoingCount}`
   ];
+
+  if (latestDependencyAnalysis && selectedNodeId) {
+    lines.push(`Transitive upstream: ${latestDependencyAnalysis.upstreamNodeIds.size}`);
+    lines.push(`Transitive downstream: ${latestDependencyAnalysis.downstreamNodeIds.size}`);
+    lines.push(`Blast radius: ${latestDependencyAnalysis.blastRadiusNodeCount}`);
+  }
 
   const moduleNodeId = getModuleNodeId(node);
   if (moduleNodeId) {
