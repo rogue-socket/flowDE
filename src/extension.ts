@@ -1156,6 +1156,30 @@ class FlowDEPanel implements vscode.Disposable {
             <h2>Flows</h2>
             <span id="flow-meta">0 discovered</span>
           </div>
+          <div class="navigation-panel" aria-label="Navigation guide">
+            <h3>Navigate</h3>
+            <div class="navigation-actions">
+              <button id="nav-overview-btn" type="button">Overview Mode</button>
+              <button id="nav-follow-selection-btn" type="button">Follow Selection</button>
+              <button id="nav-reset-btn" type="button">Reset Navigation</button>
+            </div>
+            <p id="navigation-status" class="navigation-status">
+              Overview Mode switches to module-level and fits the full graph.
+            </p>
+            <div class="navigation-shortcuts">
+              <span><strong>Hotkeys:</strong> O overview, F fit, 0 reset zoom, Esc clear selection</span>
+            </div>
+            <div class="navigation-legend" aria-label="Node and edge meaning">
+              <div class="navigation-legend-row"><strong>Module</strong><span>file-level container</span></div>
+              <div class="navigation-legend-row"><strong>Class</strong><span>object scope and methods</span></div>
+              <div class="navigation-legend-row"><strong>Function</strong><span>callable execution step</span></div>
+              <div class="navigation-legend-row"><strong>Variable</strong><span>state/value node</span></div>
+              <div class="navigation-legend-row"><strong>Call edge</strong><span>function invokes function</span></div>
+              <div class="navigation-legend-row"><strong>Dependency edge</strong><span>import/reference link</span></div>
+              <div class="navigation-legend-row"><strong>Data-flow edge</strong><span>value transformation path</span></div>
+              <div class="navigation-legend-row"><strong>Execution edge</strong><span>runtime trace transition</span></div>
+            </div>
+          </div>
           <div class="focus-panel" aria-label="Graph focus controls">
             <h3>Focus</h3>
             <label class="focus-control">

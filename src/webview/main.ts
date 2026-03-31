@@ -210,6 +210,10 @@ const dataFlowStatus = getRequiredElement<HTMLElement>('#dataflow-status');
 const abstractionLevelSelect = getRequiredElement<HTMLSelectElement>('#abstraction-level');
 const abstractionAutoToggle = getRequiredElement<HTMLInputElement>('#abstraction-auto');
 const abstractionStatus = getRequiredElement<HTMLElement>('#abstraction-status');
+const navigationOverviewButton = getRequiredElement<HTMLButtonElement>('#nav-overview-btn');
+const navigationFollowSelectionButton = getRequiredElement<HTMLButtonElement>('#nav-follow-selection-btn');
+const navigationResetButton = getRequiredElement<HTMLButtonElement>('#nav-reset-btn');
+const navigationStatus = getRequiredElement<HTMLElement>('#navigation-status');
 const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
 const layerStructuralToggle = getRequiredElement<HTMLInputElement>('#layer-structural');
 const layerDependencyToggle = getRequiredElement<HTMLInputElement>('#layer-dependency');
@@ -700,8 +704,8 @@ layoutButton.addEventListener('click', () => {
 });
 
 fitButton.addEventListener('click', () => {
-  graph.fit(graph.elements(), 80);
-  updateZoomResetLabel();
+  fitGraphToCurrentView();
+  updateNavigationStatus('Fit applied to current graph scope.');
 });
 
 zoomInButton.addEventListener('click', () => {
@@ -718,6 +722,19 @@ zoomResetButton.addEventListener('click', () => {
     renderedPosition: { x: graph.width() / 2, y: graph.height() / 2 }
   });
   updateZoomResetLabel();
+  updateNavigationStatus('Zoom reset to 100%.');
+});
+
+navigationOverviewButton.addEventListener('click', () => {
+  applyOverviewMode();
+});
+
+navigationFollowSelectionButton.addEventListener('click', () => {
+  followCurrentSelection();
+});
+
+navigationResetButton.addEventListener('click', () => {
+  resetNavigationState();
 });
 
 flowList.addEventListener('click', (event) => {
@@ -1133,6 +1150,51 @@ window.addEventListener('resize', () => {
   scheduleMinimapRender();
 });
 
+window.addEventListener('keydown', (event: KeyboardEvent) => {
+  if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+    return;
+  }
+
+  if (isTypingContext(event.target)) {
+    return;
+  }
+
+  const key = event.key.toLowerCase();
+  if (key === 'o') {
+    event.preventDefault();
+    applyOverviewMode();
+    return;
+  }
+
+  if (key === 'f') {
+    event.preventDefault();
+    graph.fit(graph.elements(), 80);
+    updateZoomResetLabel();
+    scheduleMinimapRender();
+    updateNavigationStatus('Fit applied to current graph scope.');
+    return;
+  }
+
+  if (key === '0') {
+    event.preventDefault();
+    graph.zoom({
+      level: 1,
+      renderedPosition: { x: graph.width() / 2, y: graph.height() / 2 }
+    });
+    updateZoomResetLabel();
+    scheduleMinimapRender();
+    updateNavigationStatus('Zoom reset to 100%.');
+    return;
+  }
+
+  if (key === 'escape') {
+    event.preventDefault();
+    selectedNodeId = undefined;
+    applyFlowHighlighting();
+    updateNavigationStatus('Selection cleared.');
+  }
+});
+
 minimapCanvas.addEventListener('pointerdown', (event: PointerEvent) => {
   if (!minimapTransform) {
     return;
@@ -1204,6 +1266,7 @@ dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
 abstractionLevelSelect.value = graphAbstraction.manualLevel;
 abstractionAutoToggle.checked = graphAbstraction.autoByZoom;
 syncAbstractionLevelFromZoom(false);
+updateNavigationStatus('Use Overview Mode first, then Follow Selection to drill in.');
 callPathDepth.value = String(callPathExplorer.maxDepth);
 callPathDepthValue.textContent = String(callPathExplorer.maxDepth);
 dataFlowDirection.value = dataFlowExplorer.direction;
@@ -1841,6 +1904,134 @@ function rerenderGraphFromSource(): void {
   }
 
   renderGraph(latestGraphData);
+}
+
+function updateNavigationStatus(message: string): void {
+  navigationStatus.textContent = message;
+}
+
+function fitGraphToCurrentView(): void {
+  graph.fit(graph.elements(), 80);
+  updateZoomResetLabel();
+  scheduleMinimapRender();
+}
+
+function setFocusModule(moduleNodeId: string | undefined): void {
+  if (!moduleNodeId) {
+    focusFilters.moduleNodeId = 'all';
+    focusFile.value = 'all';
+    return;
+  }
+
+  const hasOption = Array.from(focusFile.options).some((option) => option.value === moduleNodeId);
+  if (!hasOption) {
+    focusFilters.moduleNodeId = 'all';
+    focusFile.value = 'all';
+    return;
+  }
+
+  focusFilters.moduleNodeId = moduleNodeId;
+  focusFile.value = moduleNodeId;
+}
+
+function clearExplorationOverlays(): void {
+  callPathExplorer.enabled = false;
+  dataFlowExplorer.enabled = false;
+  latestDataFlowAnalysis = undefined;
+  callPathStatus.textContent = 'Select an entry point to explore branching paths.';
+  dataFlowStatus.textContent = 'Select a source node to trace data transformations.';
+}
+
+function applyOverviewMode(): void {
+  stopPlayback();
+  selectedFlowId = undefined;
+  selectedStepIndex = undefined;
+  selectedNodeId = undefined;
+  clearExplorationOverlays();
+
+  setFocusModule(undefined);
+  focusFilters.neighborhoodOnly = false;
+  focusNeighborhood.checked = false;
+
+  graphAbstraction.autoByZoom = false;
+  abstractionAutoToggle.checked = false;
+  graphAbstraction.manualLevel = 'system';
+  graphAbstraction.effectiveLevel = 'system';
+  abstractionLevelSelect.value = 'system';
+  updateAbstractionStatus();
+
+  renderFlowSidebar();
+  rerenderGraphFromSource();
+  fitGraphToCurrentView();
+  updateNavigationStatus('Overview mode active: module-level map fitted to canvas.');
+}
+
+function followCurrentSelection(): void {
+  if (!selectedNodeId) {
+    updateNavigationStatus('Follow selection requires choosing a node first.');
+    return;
+  }
+
+  const node = nodeCatalog.get(selectedNodeId);
+  if (!node) {
+    updateNavigationStatus('Selected node is no longer available in current graph state.');
+    return;
+  }
+
+  const targetLevel: AbstractionLevel =
+    node.type === 'module' ? 'system' : node.type === 'variable' ? 'detail' : 'function';
+  graphAbstraction.autoByZoom = false;
+  abstractionAutoToggle.checked = false;
+  graphAbstraction.manualLevel = targetLevel;
+  graphAbstraction.effectiveLevel = targetLevel;
+  abstractionLevelSelect.value = targetLevel;
+  updateAbstractionStatus();
+
+  const moduleNodeId = node.type === 'module' ? node.id : getModuleNodeId(node);
+  setFocusModule(moduleNodeId);
+  focusFilters.neighborhoodOnly = true;
+  focusNeighborhood.checked = true;
+
+  rerenderGraphFromSource();
+  focusNode(node.id, true);
+  applyFlowHighlighting();
+  updateNavigationStatus(`Following ${node.name}: scoped to local neighborhood.`);
+}
+
+function resetNavigationState(): void {
+  stopPlayback();
+  selectedFlowId = undefined;
+  selectedStepIndex = undefined;
+  selectedNodeId = undefined;
+  clearExplorationOverlays();
+
+  setFocusModule(undefined);
+  focusFilters.neighborhoodOnly = false;
+  focusNeighborhood.checked = false;
+
+  graphAbstraction.manualLevel = 'function';
+  abstractionLevelSelect.value = 'function';
+  graphAbstraction.autoByZoom = true;
+  abstractionAutoToggle.checked = true;
+
+  renderFlowSidebar();
+  syncAbstractionLevelFromZoom(true);
+  fitGraphToCurrentView();
+  updateNavigationStatus('Navigation reset: auto abstraction restored and full graph fitted.');
+}
+
+function isTypingContext(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element) {
+    return false;
+  }
+
+  const tagName = element.tagName.toLowerCase();
+  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+    return true;
+  }
+
+  return element.isContentEditable;
 }
 
 function resolveAbstractionLevelForZoom(zoom: number): AbstractionLevel {

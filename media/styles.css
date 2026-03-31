@@ -115,6 +115,7 @@ body {
 }
 
 .focus-panel,
+.navigation-panel,
 .node-inspector-panel,
 .reduction-panel,
 .layer-panel,
@@ -131,6 +132,7 @@ body {
 }
 
 .focus-panel h3,
+.navigation-panel h3,
 .node-inspector-panel h3,
 .reduction-panel h3,
 .layer-panel h3,
@@ -149,6 +151,58 @@ body {
   font-size: 10px;
   color: var(--muted-fg);
   line-height: 1.35;
+}
+
+.navigation-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.navigation-actions button {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--button-bg);
+  color: var(--panel-fg);
+  font-size: 10px;
+  padding: 5px 6px;
+  cursor: pointer;
+}
+
+.navigation-actions button:hover {
+  background: var(--button-hover);
+}
+
+.navigation-status,
+.navigation-shortcuts {
+  margin: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-bg) 88%, black 5%);
+  color: var(--muted-fg);
+  font-size: 10px;
+  line-height: 1.45;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
+.navigation-legend {
+  display: grid;
+  gap: 5px;
+}
+
+.navigation-legend-row {
+  display: grid;
+  grid-template-columns: minmax(86px, auto) 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 10px;
+  color: var(--muted-fg);
+}
+
+.navigation-legend-row strong {
+  color: color-mix(in srgb, var(--panel-fg) 86%, transparent);
+  font-weight: 600;
 }
 
 .focus-control {
