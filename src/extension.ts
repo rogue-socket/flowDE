@@ -1164,6 +1164,29 @@ class FlowDEPanel implements vscode.Disposable {
               <button id="nav-follow-selection-btn" type="button">Follow Selection</button>
               <button id="nav-reset-btn" type="button">Reset Navigation</button>
             </div>
+            <div class="journey-panel" aria-label="Journey flow controls">
+              <label class="focus-control">
+                <span>Journey mode</span>
+                <select id="journey-mode">
+                  <option value="file" selected>File Flow (imports/files)</option>
+                  <option value="code">Code Flow (modules/functions)</option>
+                </select>
+              </label>
+              <label class="focus-control">
+                <span>Entry node</span>
+                <select id="journey-entry">
+                  <option value="">Select entry</option>
+                </select>
+              </label>
+              <div class="journey-actions">
+                <button id="journey-start-btn" type="button">Start</button>
+                <button id="journey-prev-btn" type="button">Prev</button>
+                <button id="journey-next-btn" type="button">Next</button>
+                <button id="journey-clear-btn" type="button">Clear</button>
+              </div>
+              <p id="journey-meta" class="journey-meta">Step 0 / 0</p>
+              <p id="journey-status" class="journey-status">Pick a mode and entry, then Start to walk the graph.</p>
+            </div>
             <p id="navigation-status" class="navigation-status">
               Overview Mode switches to module-level and fits the full graph.
             </p>

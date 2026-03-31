@@ -154,6 +154,17 @@ interface DataFlowAnalysisSnapshot {
   transformationCount: number;
 }
 
+type JourneyMode = 'file' | 'code';
+
+interface JourneyState {
+  enabled: boolean;
+  mode: JourneyMode;
+  entryNodeId: string;
+  nodeIds: string[];
+  edgeIds: string[];
+  currentIndex: number;
+}
+
 type AbstractionLevel = 'system' | 'function' | 'detail';
 
 interface GraphAbstractionState {
@@ -214,6 +225,14 @@ const navigationOverviewButton = getRequiredElement<HTMLButtonElement>('#nav-ove
 const navigationFollowSelectionButton = getRequiredElement<HTMLButtonElement>('#nav-follow-selection-btn');
 const navigationResetButton = getRequiredElement<HTMLButtonElement>('#nav-reset-btn');
 const navigationStatus = getRequiredElement<HTMLElement>('#navigation-status');
+const journeyModeSelect = getRequiredElement<HTMLSelectElement>('#journey-mode');
+const journeyEntrySelect = getRequiredElement<HTMLSelectElement>('#journey-entry');
+const journeyStartButton = getRequiredElement<HTMLButtonElement>('#journey-start-btn');
+const journeyPrevButton = getRequiredElement<HTMLButtonElement>('#journey-prev-btn');
+const journeyNextButton = getRequiredElement<HTMLButtonElement>('#journey-next-btn');
+const journeyClearButton = getRequiredElement<HTMLButtonElement>('#journey-clear-btn');
+const journeyMeta = getRequiredElement<HTMLElement>('#journey-meta');
+const journeyStatus = getRequiredElement<HTMLElement>('#journey-status');
 const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
 const layerStructuralToggle = getRequiredElement<HTMLInputElement>('#layer-structural');
 const layerDependencyToggle = getRequiredElement<HTMLInputElement>('#layer-dependency');
@@ -336,6 +355,15 @@ const dataFlowExplorer: DataFlowExplorerState = {
   sourceNodeId: '',
   direction: (dataFlowDirection.value as DataFlowDirection) || 'forward',
   maxHops: Number.parseInt(dataFlowHops.value, 10) || 4
+};
+
+const journeyState: JourneyState = {
+  enabled: false,
+  mode: (journeyModeSelect.value as JourneyMode) || 'file',
+  entryNodeId: '',
+  nodeIds: [],
+  edgeIds: [],
+  currentIndex: 0
 };
 
 let latestDataFlowAnalysis: DataFlowAnalysisSnapshot | undefined;
@@ -667,6 +695,15 @@ graph.on('tap', 'node', (event: cytoscape.EventObject) => {
   const node = event.target;
   const nodeId = node.id();
   selectedNodeId = nodeId;
+
+  if (journeyState.enabled) {
+    const nextIndex = journeyState.nodeIds.indexOf(nodeId);
+    if (nextIndex >= 0) {
+      journeyState.currentIndex = nextIndex;
+      updateJourneyUi();
+    }
+  }
+
   const selectedNode = nodeCatalog.get(nodeId);
   if (selectedNode) {
     editRenameName.value = selectedNode.name;
@@ -764,7 +801,63 @@ navigationResetButton.addEventListener('click', () => {
   resetNavigationState();
 });
 
+journeyModeSelect.addEventListener('change', () => {
+  const mode = journeyModeSelect.value;
+  if (mode !== 'file' && mode !== 'code') {
+    return;
+  }
+
+  journeyState.mode = mode;
+  journeyState.enabled = false;
+  journeyState.nodeIds = [];
+  journeyState.edgeIds = [];
+  journeyState.currentIndex = 0;
+
+  if (latestGraphData) {
+    syncJourneyEntryOptions(latestGraphData);
+
+    if (mode === 'code') {
+      const selectedNode = selectedNodeId ? nodeCatalog.get(selectedNodeId) : undefined;
+      const selectedModuleId = selectedNode ? thisNodeModuleId(selectedNode) : undefined;
+      const seededEntry = selectedModuleId
+        ? findPreferredFunctionEntryForModule(latestGraphData, selectedModuleId)
+        : undefined;
+
+      if (seededEntry) {
+        journeyEntrySelect.value = seededEntry;
+        journeyState.entryNodeId = seededEntry;
+      }
+    }
+  }
+
+  updateJourneyUi(`Mode switched to ${mode === 'file' ? 'File Flow' : 'Code Flow'}. Choose an entry.`);
+  applyFlowHighlighting();
+});
+
+journeyEntrySelect.addEventListener('change', () => {
+  journeyState.entryNodeId = journeyEntrySelect.value;
+  updateJourneyUi();
+});
+
+journeyStartButton.addEventListener('click', () => {
+  startJourney();
+});
+
+journeyPrevButton.addEventListener('click', () => {
+  stepJourney(-1);
+});
+
+journeyNextButton.addEventListener('click', () => {
+  stepJourney(1);
+});
+
+journeyClearButton.addEventListener('click', () => {
+  clearJourney('Journey cleared. Pick an entry to start again.');
+  applyFlowHighlighting();
+});
+
 flowList.addEventListener('click', (event) => {
+  clearJourney();
   const target = event.target as HTMLElement | null;
   const button = target?.closest<HTMLButtonElement>('button[data-flow-id]');
   if (!button) {
@@ -884,6 +977,7 @@ callPathDepth.addEventListener('input', () => {
 });
 
 callPathRunButton.addEventListener('click', () => {
+  clearJourney();
   callPathExplorer.entryNodeId = callPathEntry.value;
   if (!callPathExplorer.entryNodeId) {
     callPathStatus.textContent = 'Select an entry function to explore call paths.';
@@ -927,6 +1021,7 @@ dataFlowHops.addEventListener('input', () => {
 });
 
 dataFlowRunButton.addEventListener('click', () => {
+  clearJourney();
   dataFlowExplorer.sourceNodeId = dataFlowSource.value || selectedNodeId || '';
   if (!dataFlowExplorer.sourceNodeId) {
     dataFlowStatus.textContent = 'Select a source node to trace data flow.';
@@ -949,6 +1044,7 @@ dataFlowClearButton.addEventListener('click', () => {
 });
 
 focusClearButton.addEventListener('click', () => {
+  clearJourney('Journey cleared.');
   selectedNodeId = undefined;
   focusFilters.moduleNodeId = 'all';
   focusFilters.neighborhoodOnly = false;
@@ -1292,9 +1388,11 @@ dependencyHops.value = String(dependencyTraversal.maxHops);
 dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
 abstractionLevelSelect.value = graphAbstraction.manualLevel;
 abstractionAutoToggle.checked = graphAbstraction.autoByZoom;
+journeyModeSelect.value = journeyState.mode;
 syncAbstractionLevelFromZoom(false);
 setGuidedMode(true, false);
 updateNavigationStatus('Guided mode active. Start with Show full map, then click a node to drill in.');
+updateJourneyUi();
 callPathDepth.value = String(callPathExplorer.maxDepth);
 callPathDepthValue.textContent = String(callPathExplorer.maxDepth);
 dataFlowDirection.value = dataFlowExplorer.direction;
@@ -1348,6 +1446,7 @@ function renderGraph(graphData: GraphData): void {
   syncModuleFilterOptions(graphData);
   syncGraphEditOptions(graphData);
   syncExplorationOptions(graphData);
+  syncJourneyEntryOptions(graphData);
 
   const elements = [
     ...displayedGraphData.nodes.map((node) => ({
@@ -1410,6 +1509,7 @@ function renderGraph(graphData: GraphData): void {
   const warningCompact = graphData.meta.parseWarnings.length > 0 ? ' | warnings' : '';
 
   statusText.textContent = `${graphData.meta.workspaceName} | ${displayedGraphData.nodes.length} nodes | ${displayedGraphData.edges.length} edges${relationSuffix}${modelSuffix}${layerSuffix}${abstractionSuffix}${cacheSuffix}${warningCompact}`;
+  updateJourneyUi();
 }
 
 function renderFlowSidebar(): void {
@@ -1494,6 +1594,7 @@ function applyFlowHighlighting(): void {
   const activeFlow = getSelectedFlow();
   if (!activeFlow) {
     applyFocusFilters();
+    applyJourneyHighlighting();
     renderExplainPanel(undefined);
     updatePlaybackControls();
     applyExecutionOverlay(false);
@@ -1539,6 +1640,7 @@ function applyFlowHighlighting(): void {
   }
 
   applyFocusFilters();
+  applyJourneyHighlighting();
 
   renderExplainPanel(activeFlow);
   updatePlaybackControls();
@@ -1938,6 +2040,281 @@ function updateNavigationStatus(message: string): void {
   navigationStatus.textContent = message;
 }
 
+function updateJourneyUi(message?: string): void {
+  const total = journeyState.nodeIds.length;
+  const currentStep = journeyState.enabled && total > 0 ? journeyState.currentIndex + 1 : 0;
+  journeyMeta.textContent = `Step ${currentStep} / ${total}`;
+
+  journeyPrevButton.disabled = !journeyState.enabled || journeyState.currentIndex <= 0;
+  journeyNextButton.disabled = !journeyState.enabled || journeyState.currentIndex >= total - 1;
+  journeyClearButton.disabled = !journeyState.enabled;
+
+  if (message) {
+    journeyStatus.textContent = message;
+    return;
+  }
+
+  if (!journeyState.enabled) {
+    journeyStatus.textContent = 'Pick a mode and entry, then Start to walk the graph.';
+    return;
+  }
+
+  const currentNodeId = journeyState.nodeIds[journeyState.currentIndex];
+  const currentNodeName = nodeCatalog.get(currentNodeId)?.name ?? currentNodeId;
+  journeyStatus.textContent = `${journeyState.mode === 'file' ? 'File Flow' : 'Code Flow'} active at ${currentNodeName}`;
+}
+
+function clearJourney(message?: string): void {
+  journeyState.enabled = false;
+  journeyState.nodeIds = [];
+  journeyState.edgeIds = [];
+  journeyState.currentIndex = 0;
+
+  if (message) {
+    updateJourneyUi(message);
+    return;
+  }
+
+  updateJourneyUi();
+}
+
+function setJourneyModePresentation(mode: JourneyMode): void {
+  graphAbstraction.autoByZoom = false;
+  abstractionAutoToggle.checked = false;
+
+  if (mode === 'file') {
+    graphAbstraction.manualLevel = 'system';
+    abstractionLevelSelect.value = 'system';
+    if (reductionState.collapseLibraries) {
+      reductionState.collapseLibraries = false;
+      collapseLibrariesToggle.checked = false;
+    }
+  } else {
+    graphAbstraction.manualLevel = 'function';
+    abstractionLevelSelect.value = 'function';
+  }
+
+  setFocusModule(undefined);
+  focusFilters.neighborhoodOnly = false;
+  focusNeighborhood.checked = false;
+  syncAbstractionLevelFromZoom(true);
+}
+
+function buildJourneyPath(graphData: GraphData, mode: JourneyMode, entryNodeId: string): { nodeIds: string[]; edgeIds: string[] } {
+  interface Neighbor {
+    targetId: string;
+    edgeId: string;
+    weight: number;
+  }
+
+  const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
+  const adjacency = new Map<string, Neighbor[]>();
+
+  const addNeighbor = (sourceId: string, targetId: string, edge: GraphEdge, weightBonus: number): void => {
+    if (!nodeById.has(sourceId) || !nodeById.has(targetId)) {
+      return;
+    }
+
+    const neighbors = adjacency.get(sourceId) ?? [];
+    const existing = neighbors.find((neighbor) => neighbor.targetId === targetId);
+    const weight = getEdgeConfidence(edge) + weightBonus;
+
+    if (existing) {
+      if (weight > existing.weight) {
+        existing.weight = weight;
+        existing.edgeId = edge.id;
+      }
+    } else {
+      neighbors.push({
+        targetId,
+        edgeId: edge.id,
+        weight
+      });
+    }
+
+    adjacency.set(sourceId, neighbors);
+  };
+
+  if (mode === 'code') {
+    for (const edge of graphData.edges) {
+      if (edge.type !== 'call') {
+        continue;
+      }
+
+      const sourceNode = nodeById.get(edge.source);
+      const targetNode = nodeById.get(edge.target);
+      if (!sourceNode || !targetNode || sourceNode.type !== 'function' || targetNode.type !== 'function') {
+        continue;
+      }
+
+      addNeighbor(sourceNode.id, targetNode.id, edge, 0.35);
+    }
+  } else {
+    for (const edge of graphData.edges) {
+      if (edge.type !== 'dependency' && edge.type !== 'call' && edge.type !== 'dataflow' && edge.type !== 'class-usage') {
+        continue;
+      }
+
+      const sourceNode = nodeById.get(edge.source);
+      const targetNode = nodeById.get(edge.target);
+      const sourceModuleId = sourceNode ? thisNodeModuleId(sourceNode) : undefined;
+      const targetModuleId = targetNode ? thisNodeModuleId(targetNode) : undefined;
+
+      if (!sourceModuleId || !targetModuleId || sourceModuleId === targetModuleId) {
+        continue;
+      }
+
+      const bonus = edge.type === 'dependency' ? 0.42 : edge.type === 'call' ? 0.28 : 0.18;
+      addNeighbor(sourceModuleId, targetModuleId, edge, bonus);
+    }
+  }
+
+  const nodeIds: string[] = [];
+  const edgeIds: string[] = [];
+  const visited = new Set<string>();
+
+  if (!nodeById.has(entryNodeId)) {
+    return { nodeIds, edgeIds };
+  }
+
+  nodeIds.push(entryNodeId);
+  visited.add(entryNodeId);
+
+  let currentId = entryNodeId;
+  const maxSteps = 140;
+  for (let step = 0; step < maxSteps; step += 1) {
+    const candidates = (adjacency.get(currentId) ?? [])
+      .filter((candidate) => !visited.has(candidate.targetId))
+      .sort((a, b) => {
+        if (b.weight !== a.weight) {
+          return b.weight - a.weight;
+        }
+
+        const aName = nodeById.get(a.targetId)?.name ?? a.targetId;
+        const bName = nodeById.get(b.targetId)?.name ?? b.targetId;
+        const sourceTie = aName.localeCompare(bName);
+        if (sourceTie !== 0) {
+          return sourceTie;
+        }
+
+          return a.targetId.localeCompare(b.targetId);
+      });
+
+    if (candidates.length === 0) {
+      break;
+    }
+
+    const next = candidates[0];
+    nodeIds.push(next.targetId);
+    edgeIds.push(next.edgeId);
+    visited.add(next.targetId);
+    currentId = next.targetId;
+  }
+
+  return { nodeIds, edgeIds };
+}
+
+function startJourney(): void {
+  if (!latestGraphData) {
+    updateJourneyUi('Graph not ready yet. Click Refresh and try again.');
+    return;
+  }
+
+  const entryNodeId = journeyEntrySelect.value || journeyState.entryNodeId;
+  if (!entryNodeId) {
+    updateJourneyUi('Choose an entry node before starting the journey.');
+    return;
+  }
+
+  stopPlayback();
+  selectedFlowId = undefined;
+  selectedStepIndex = undefined;
+  callPathExplorer.enabled = false;
+  dataFlowExplorer.enabled = false;
+
+  setJourneyModePresentation(journeyState.mode);
+
+  const graphData = latestDisplayedGraphData;
+  if (!graphData) {
+    updateJourneyUi('Graph view unavailable for journey start. Try Refresh.');
+    return;
+  }
+
+  const path = buildJourneyPath(graphData, journeyState.mode, entryNodeId);
+  if (path.nodeIds.length === 0) {
+    updateJourneyUi('Selected entry is not visible in current view. Choose another entry.');
+    return;
+  }
+
+  journeyState.enabled = true;
+  journeyState.entryNodeId = entryNodeId;
+  journeyState.nodeIds = path.nodeIds;
+  journeyState.edgeIds = path.edgeIds;
+  journeyState.currentIndex = 0;
+  selectedNodeId = path.nodeIds[0];
+
+  applyFlowHighlighting();
+  focusNode(selectedNodeId, true);
+  updateJourneyUi(`Journey started: ${journeyState.mode === 'file' ? 'File Flow' : 'Code Flow'}.`);
+}
+
+function stepJourney(delta: number): void {
+  if (!journeyState.enabled || journeyState.nodeIds.length === 0) {
+    updateJourneyUi('Start a journey first.');
+    return;
+  }
+
+  const nextIndex = clamp(journeyState.currentIndex + delta, 0, journeyState.nodeIds.length - 1);
+  if (nextIndex === journeyState.currentIndex) {
+    return;
+  }
+
+  journeyState.currentIndex = nextIndex;
+  selectedNodeId = journeyState.nodeIds[nextIndex];
+  applyFlowHighlighting();
+  focusNode(selectedNodeId, true);
+  updateJourneyUi();
+}
+
+function applyJourneyHighlighting(): void {
+  if (!journeyState.enabled || journeyState.nodeIds.length === 0) {
+    return;
+  }
+
+  const activeNodeIds = new Set(journeyState.nodeIds);
+  const activeEdgeIds = new Set(journeyState.edgeIds);
+
+  graph.nodes().forEach((node) => {
+    if (!activeNodeIds.has(node.id())) {
+      node.addClass('dimmed');
+      return;
+    }
+
+    node.addClass('flow-node').removeClass('dimmed');
+  });
+
+  graph.edges().forEach((edge) => {
+    if (!activeEdgeIds.has(edge.id())) {
+      edge.addClass('dimmed');
+      return;
+    }
+
+    edge.addClass('flow-edge').removeClass('dimmed');
+  });
+
+  const currentNodeId = journeyState.nodeIds[journeyState.currentIndex];
+  if (currentNodeId) {
+    graph.getElementById(currentNodeId).addClass('flow-current').addClass('node-selected').removeClass('dimmed');
+  }
+
+  if (journeyState.currentIndex > 0) {
+    const currentEdgeId = journeyState.edgeIds[journeyState.currentIndex - 1];
+    if (currentEdgeId) {
+      graph.getElementById(currentEdgeId).addClass('flow-current-edge').removeClass('dimmed');
+    }
+  }
+}
+
 function setGuidedMode(enabled: boolean, rerender: boolean): void {
   guidedModeEnabled = enabled;
   viewModeButton.textContent = enabled ? 'Mode: Guided' : 'Mode: Full';
@@ -1953,10 +2330,13 @@ function setGuidedMode(enabled: boolean, rerender: boolean): void {
       abstractionAutoToggle.checked = false;
     }
 
-    if (graphAbstraction.manualLevel === 'detail') {
-      graphAbstraction.manualLevel = 'function';
-      abstractionLevelSelect.value = 'function';
+    if (reductionState.collapseLibraries) {
+      reductionState.collapseLibraries = false;
+      collapseLibrariesToggle.checked = false;
     }
+
+    graphAbstraction.manualLevel = 'system';
+    abstractionLevelSelect.value = 'system';
 
     graphAbstraction.effectiveLevel = graphAbstraction.manualLevel;
     updateAbstractionStatus();
@@ -1974,6 +2354,8 @@ function setGuidedMode(enabled: boolean, rerender: boolean): void {
 
     updateNavigationStatus('Full mode: all analysis panels are visible.');
   }
+
+  updateJourneyUi();
 
 }
 
@@ -2010,6 +2392,7 @@ function clearExplorationOverlays(): void {
 }
 
 function applyOverviewMode(): void {
+  clearJourney('Journey cleared.');
   stopPlayback();
   selectedFlowId = undefined;
   selectedStepIndex = undefined;
@@ -2066,6 +2449,7 @@ function followCurrentSelection(): void {
 }
 
 function resetNavigationState(): void {
+  clearJourney('Journey cleared.');
   stopPlayback();
   selectedFlowId = undefined;
   selectedStepIndex = undefined;
@@ -2076,15 +2460,17 @@ function resetNavigationState(): void {
   focusFilters.neighborhoodOnly = false;
   focusNeighborhood.checked = false;
 
-  graphAbstraction.manualLevel = 'function';
-  abstractionLevelSelect.value = 'function';
+  graphAbstraction.manualLevel = 'system';
+  abstractionLevelSelect.value = 'system';
   graphAbstraction.autoByZoom = false;
   abstractionAutoToggle.checked = false;
+  reductionState.collapseLibraries = false;
+  collapseLibrariesToggle.checked = false;
 
   renderFlowSidebar();
   syncAbstractionLevelFromZoom(true);
   fitGraphToCurrentView();
-  updateNavigationStatus('Navigation reset: stable function-level view restored and full graph fitted.');
+  updateNavigationStatus('Navigation reset: stable file-level view restored and full graph fitted.');
 }
 
 function isTypingContext(target: EventTarget | null): boolean {
@@ -2798,6 +3184,79 @@ function syncExplorationOptions(graphData: GraphData): void {
   dataFlowExplorer.sourceNodeId = dataFlowSource.value;
 }
 
+function syncJourneyEntryOptions(graphData: GraphData): void {
+  const previousEntry = journeyState.entryNodeId || journeyEntrySelect.value;
+  const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
+
+  if (journeyState.mode === 'file') {
+    const moduleNodes = graphData.nodes
+      .filter((node) => node.type === 'module')
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    applySelectOptions(
+      journeyEntrySelect,
+      [
+        { value: '', label: 'Select entry file/module' },
+        ...moduleNodes.map((node) => ({ value: node.id, label: node.name }))
+      ],
+      previousEntry
+    );
+  } else {
+    const functionNodes = graphData.nodes
+      .filter((node) => node.type === 'function')
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    applySelectOptions(
+      journeyEntrySelect,
+      [
+        { value: '', label: 'Select entry function' },
+        ...functionNodes.map((node) => {
+          const moduleName = getModuleNodeId(node)
+            ? nodeById.get(getModuleNodeId(node) ?? '')?.name
+            : undefined;
+          const label = moduleName ? `${node.name} (${moduleName})` : node.name;
+          return { value: node.id, label };
+        })
+      ],
+      previousEntry
+    );
+  }
+
+  journeyState.entryNodeId = journeyEntrySelect.value;
+}
+
+function findPreferredFunctionEntryForModule(graphData: GraphData, moduleNodeId: string): string | undefined {
+  const candidates = graphData.nodes.filter(
+    (node) => node.type === 'function' && getModuleNodeId(node) === moduleNodeId
+  );
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  const entryLikeNames = ['main', 'run', 'start', 'app', 'bootstrap', 'init'];
+  const ranked = [...candidates].sort((a, b) => {
+    const aLower = a.name.toLowerCase();
+    const bLower = b.name.toLowerCase();
+    const aScore = entryLikeNames.some((token) => aLower === token || aLower.endsWith(`_${token}`)) ? 2 : 0;
+    const bScore = entryLikeNames.some((token) => bLower === token || bLower.endsWith(`_${token}`)) ? 2 : 0;
+
+    if (bScore !== aScore) {
+      return bScore - aScore;
+    }
+
+    const lineA = typeof a.line === 'number' ? a.line : Number.MAX_SAFE_INTEGER;
+    const lineB = typeof b.line === 'number' ? b.line : Number.MAX_SAFE_INTEGER;
+    if (lineA !== lineB) {
+      return lineA - lineB;
+    }
+
+    return a.name.localeCompare(b.name);
+  });
+
+  return ranked[0]?.id;
+}
+
 function applyFocusFilters(): void {
   const keepNodeIds = new Set<string>();
   const keepEdgeIds = new Set<string>();
@@ -2839,6 +3298,21 @@ function applyFocusFilters(): void {
 }
 
 function applyDependencyHighlighting(): void {
+  if (journeyState.enabled) {
+    latestDependencyAnalysis = undefined;
+    if (selectedNodeId) {
+      graph.getElementById(selectedNodeId).addClass('node-selected').removeClass('dimmed');
+      const node = nodeCatalog.get(selectedNodeId);
+      dependencyStatus.textContent = node
+        ? `Journey active: ${journeyState.mode === 'file' ? 'File Flow' : 'Code Flow'} step on ${node.name}`
+        : 'Journey active: step-through traversal';
+    } else {
+      dependencyStatus.textContent = 'Journey active: choose Start to begin step-through traversal.';
+    }
+    updateNodeInspector();
+    return;
+  }
+
   if (!selectedNodeId) {
     latestDependencyAnalysis = undefined;
     dependencyStatus.textContent = 'Select a node to analyze dependency impact.';
@@ -3016,6 +3490,11 @@ function isDependencyTraversableEdge(edge: cytoscape.EdgeSingular): boolean {
 }
 
 function applyDataFlowHighlighting(): void {
+  if (journeyState.enabled) {
+    latestDataFlowAnalysis = undefined;
+    return;
+  }
+
   if (!dataFlowExplorer.enabled) {
     latestDataFlowAnalysis = undefined;
     return;

@@ -181,6 +181,48 @@ body {
   background: var(--button-hover);
 }
 
+.journey-panel {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-bg) 88%, black 5%);
+  padding: 7px;
+}
+
+.journey-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.journey-actions button {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--button-bg);
+  color: var(--panel-fg);
+  font-size: 10px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.journey-actions button:hover {
+  background: var(--button-hover);
+}
+
+.journey-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.journey-meta,
+.journey-status {
+  margin: 0;
+  color: var(--muted-fg);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .navigation-status,
 .navigation-shortcuts {
   margin: 0;
