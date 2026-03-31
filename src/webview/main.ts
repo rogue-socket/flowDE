@@ -210,14 +210,6 @@ const dataFlowStatus = getRequiredElement<HTMLElement>('#dataflow-status');
 const abstractionLevelSelect = getRequiredElement<HTMLSelectElement>('#abstraction-level');
 const abstractionAutoToggle = getRequiredElement<HTMLInputElement>('#abstraction-auto');
 const abstractionStatus = getRequiredElement<HTMLElement>('#abstraction-status');
-const quickOverviewButton = getRequiredElement<HTMLButtonElement>('#quick-overview-btn');
-const quickFollowButton = getRequiredElement<HTMLButtonElement>('#quick-follow-btn');
-const quickOpenSourceButton = getRequiredElement<HTMLButtonElement>('#quick-open-source-btn');
-const quickStepOverview = getRequiredElement<HTMLElement>('#quick-step-overview');
-const quickStepSelect = getRequiredElement<HTMLElement>('#quick-step-select');
-const quickStepFollow = getRequiredElement<HTMLElement>('#quick-step-follow');
-const quickStepOpen = getRequiredElement<HTMLElement>('#quick-step-open');
-const quickStartStatus = getRequiredElement<HTMLElement>('#quickstart-status');
 const navigationOverviewButton = getRequiredElement<HTMLButtonElement>('#nav-overview-btn');
 const navigationFollowSelectionButton = getRequiredElement<HTMLButtonElement>('#nav-follow-selection-btn');
 const navigationResetButton = getRequiredElement<HTMLButtonElement>('#nav-reset-btn');
@@ -764,28 +756,8 @@ navigationOverviewButton.addEventListener('click', () => {
   applyOverviewMode();
 });
 
-quickOverviewButton.addEventListener('click', () => {
-  applyOverviewMode();
-});
-
 navigationFollowSelectionButton.addEventListener('click', () => {
   followCurrentSelection();
-});
-
-quickFollowButton.addEventListener('click', () => {
-  followCurrentSelection();
-});
-
-quickOpenSourceButton.addEventListener('click', () => {
-  if (!selectedNodeId) {
-    updateNavigationStatus('Select a node before opening source.');
-    updateQuickStartStatus();
-    return;
-  }
-
-  openNodeSource(selectedNodeId);
-  updateNavigationStatus('Opened selected node in source editor.');
-  updateQuickStartStatus();
 });
 
 navigationResetButton.addEventListener('click', () => {
@@ -1323,7 +1295,6 @@ abstractionAutoToggle.checked = graphAbstraction.autoByZoom;
 syncAbstractionLevelFromZoom(false);
 setGuidedMode(true, false);
 updateNavigationStatus('Guided mode active. Start with Show full map, then click a node to drill in.');
-updateQuickStartStatus();
 callPathDepth.value = String(callPathExplorer.maxDepth);
 callPathDepthValue.textContent = String(callPathExplorer.maxDepth);
 dataFlowDirection.value = dataFlowExplorer.direction;
@@ -1526,7 +1497,6 @@ function applyFlowHighlighting(): void {
     renderExplainPanel(undefined);
     updatePlaybackControls();
     applyExecutionOverlay(false);
-    updateQuickStartStatus();
     scheduleMinimapRender();
     return;
   }
@@ -1573,7 +1543,6 @@ function applyFlowHighlighting(): void {
   renderExplainPanel(activeFlow);
   updatePlaybackControls();
   applyExecutionOverlay(false);
-  updateQuickStartStatus();
   scheduleMinimapRender();
 }
 
@@ -2006,51 +1975,6 @@ function setGuidedMode(enabled: boolean, rerender: boolean): void {
     updateNavigationStatus('Full mode: all analysis panels are visible.');
   }
 
-  updateQuickStartStatus();
-}
-
-function setQuickStepState(element: HTMLElement, done: boolean): void {
-  element.textContent = done ? 'Done' : 'Pending';
-  element.classList.toggle('done', done);
-}
-
-function updateQuickStartStatus(): void {
-  const overviewDone = graphAbstraction.effectiveLevel === 'system' && focusFilters.moduleNodeId === 'all';
-  const selectDone = typeof selectedNodeId === 'string' && selectedNodeId.length > 0;
-  const followDone = focusFilters.neighborhoodOnly;
-
-  let openReady = false;
-  if (selectedNodeId) {
-    const node = nodeCatalog.get(selectedNodeId);
-    openReady = Boolean(node?.filePath && typeof node?.line === 'number');
-  }
-
-  setQuickStepState(quickStepOverview, overviewDone);
-  setQuickStepState(quickStepSelect, selectDone);
-  setQuickStepState(quickStepFollow, followDone);
-  setQuickStepState(quickStepOpen, openReady);
-
-  if (!overviewDone) {
-    quickStartStatus.textContent = 'Step 1: Use Show full map to see modules first.';
-    return;
-  }
-
-  if (!selectDone) {
-    quickStartStatus.textContent = 'Step 2: Click a node in the graph to choose your investigation target.';
-    return;
-  }
-
-  if (!followDone) {
-    quickStartStatus.textContent = 'Step 3: Use Follow selected neighborhood to narrow the graph around this node.';
-    return;
-  }
-
-  if (!openReady) {
-    quickStartStatus.textContent = 'Step 4: Pick a code-backed node (with file + line) to jump into source.';
-    return;
-  }
-
-  quickStartStatus.textContent = 'Workflow ready: explore dependency/data-flow panels for deeper analysis.';
 }
 
 function fitGraphToCurrentView(): void {
@@ -2107,7 +2031,6 @@ function applyOverviewMode(): void {
   rerenderGraphFromSource();
   fitGraphToCurrentView();
   updateNavigationStatus('Overview mode active: module-level map fitted to canvas.');
-  updateQuickStartStatus();
 }
 
 function followCurrentSelection(): void {
@@ -2140,7 +2063,6 @@ function followCurrentSelection(): void {
   focusNode(node.id, true);
   applyFlowHighlighting();
   updateNavigationStatus(`Following ${node.name}: scoped to local neighborhood.`);
-  updateQuickStartStatus();
 }
 
 function resetNavigationState(): void {
@@ -2163,7 +2085,6 @@ function resetNavigationState(): void {
   syncAbstractionLevelFromZoom(true);
   fitGraphToCurrentView();
   updateNavigationStatus('Navigation reset: stable function-level view restored and full graph fitted.');
-  updateQuickStartStatus();
 }
 
 function isTypingContext(target: EventTarget | null): boolean {

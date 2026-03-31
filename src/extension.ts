@@ -1157,29 +1157,6 @@ class FlowDEPanel implements vscode.Disposable {
             <h2>Flows</h2>
             <span id="flow-meta">0 discovered</span>
           </div>
-          <div class="quickstart-panel" aria-label="Quick start guide">
-            <h3>Quick Start</h3>
-            <p class="quickstart-note">Use these steps in order when opening a new graph.</p>
-            <ol class="quickstart-steps">
-              <li class="quickstart-step">
-                <button id="quick-overview-btn" type="button">1. Show full map</button>
-                <span id="quick-step-overview" class="quick-step-state">Pending</span>
-              </li>
-              <li class="quickstart-step">
-                <span class="quickstart-step-label">2. Click a node you care about</span>
-                <span id="quick-step-select" class="quick-step-state">Pending</span>
-              </li>
-              <li class="quickstart-step">
-                <button id="quick-follow-btn" type="button">3. Follow selected neighborhood</button>
-                <span id="quick-step-follow" class="quick-step-state">Pending</span>
-              </li>
-              <li class="quickstart-step">
-                <button id="quick-open-source-btn" type="button">4. Open source and inspect code</button>
-                <span id="quick-step-open" class="quick-step-state">Pending</span>
-              </li>
-            </ol>
-            <p id="quickstart-status" class="quickstart-status">Start at step 1 to orient yourself before drilling in.</p>
-          </div>
           <div class="navigation-panel" aria-label="Navigation guide">
             <h3>Navigate</h3>
             <div class="navigation-actions">
@@ -1461,17 +1438,6 @@ class FlowDEPanel implements vscode.Disposable {
             <div class="minimap-title">Overview</div>
             <canvas id="minimap-canvas" width="220" height="140"></canvas>
           </aside>
-          <div class="legend-inline" aria-label="Graph legend">
-            <span class="legend-item"><span class="legend-dot module"></span>Module</span>
-            <span class="legend-item"><span class="legend-dot class"></span>Class</span>
-            <span class="legend-item"><span class="legend-dot function"></span>Function</span>
-            <span class="legend-item"><span class="legend-dot variable"></span>Variable</span>
-            <span class="legend-item"><span class="legend-dot external"></span>External</span>
-            <span class="legend-item"><span class="legend-edge call"></span>Call</span>
-            <span class="legend-item"><span class="legend-edge dependency"></span>Dependency</span>
-            <span class="legend-item"><span class="legend-edge dataflow"></span>Data Flow</span>
-            <span class="legend-item"><span class="legend-edge execution"></span>Execution</span>
-          </div>
         </section>
       </main>
     </div>
