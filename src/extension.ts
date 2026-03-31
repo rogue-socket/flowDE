@@ -1266,7 +1266,7 @@ class FlowDEPanel implements vscode.Disposable {
         </div>
         <div class="toolbar-actions">
           <button id="layout-btn" type="button">Layout: Clustered</button>
-          <button id="view-mode-btn" type="button">Mode: Guided</button>
+          <button id="view-mode-btn" type="button">Advanced: Off</button>
           <button id="fit-btn" type="button">Fit</button>
           <button id="zoom-out-btn" type="button" aria-label="Zoom out">-</button>
           <button id="zoom-reset-btn" type="button">100%</button>
@@ -1280,16 +1280,11 @@ class FlowDEPanel implements vscode.Disposable {
       <main class="workspace-layout">
         <aside class="flow-sidebar" aria-label="Flow sidebar">
           <div class="flow-sidebar-header">
-            <h2>Flows</h2>
+            <h2>Navigator</h2>
             <span id="flow-meta">0 discovered</span>
           </div>
           <div class="navigation-panel" aria-label="Navigation guide">
-            <h3>Navigate</h3>
-            <div class="navigation-actions">
-              <button id="nav-overview-btn" type="button">Overview Mode</button>
-              <button id="nav-follow-selection-btn" type="button">Follow Selection</button>
-              <button id="nav-reset-btn" type="button">Reset Navigation</button>
-            </div>
+            <h3>Workflow</h3>
             <div class="journey-panel" aria-label="Journey flow controls">
               <label class="focus-control">
                 <span>Journey mode</span>
@@ -1308,44 +1303,42 @@ class FlowDEPanel implements vscode.Disposable {
                 <button id="journey-start-btn" type="button">Start</button>
                 <button id="journey-prev-btn" type="button">Prev</button>
                 <button id="journey-next-btn" type="button">Next</button>
-                <button id="journey-clear-btn" type="button">Clear</button>
+                <button id="nav-reset-btn" type="button">Reset</button>
               </div>
+              <p id="workflow-context" class="journey-status">Select a node, then use Prev/Next to walk your chosen path.</p>
               <p id="journey-meta" class="journey-meta">Step 0 / 0</p>
               <p id="journey-status" class="journey-status">Pick a mode and entry, then Start to walk the graph.</p>
               <p id="trail-status" class="trail-status">Chosen path: none</p>
               <ol id="trail-history" class="trail-history"></ol>
             </div>
-            <p id="navigation-status" class="navigation-status">
-              Overview Mode switches to module-level and fits the full graph.
-            </p>
-            <div class="navigation-shortcuts">
-              <span><strong>Hotkeys:</strong> O overview, F fit, 0 reset zoom, Esc clear selection</span>
-            </div>
-            <div class="navigation-legend" aria-label="Node and edge meaning">
-              <div class="navigation-legend-row"><strong>Module</strong><span>file-level container</span></div>
-              <div class="navigation-legend-row"><strong>Class</strong><span>object scope and methods</span></div>
-              <div class="navigation-legend-row"><strong>Function</strong><span>callable execution step</span></div>
-              <div class="navigation-legend-row"><strong>Variable</strong><span>state/value node</span></div>
-              <div class="navigation-legend-row"><strong>Call edge</strong><span>function invokes function</span></div>
-              <div class="navigation-legend-row"><strong>Dependency edge</strong><span>import/reference link</span></div>
-              <div class="navigation-legend-row"><strong>Data-flow edge</strong><span>value transformation path</span></div>
-              <div class="navigation-legend-row"><strong>Execution edge</strong><span>runtime trace transition</span></div>
+            <div id="advanced-navigation-panel" class="panel-hidden">
+              <div class="navigation-actions">
+                <button id="nav-overview-btn" type="button">Overview Mode</button>
+                <button id="nav-follow-selection-btn" type="button">Follow Selection</button>
+                <button id="journey-clear-btn" type="button">Clear Path</button>
+              </div>
+              <p id="navigation-status" class="navigation-status">
+                Advanced controls are available. Use Reset to return to the base workflow.
+              </p>
+              <div class="navigation-shortcuts">
+                <span><strong>Hotkeys:</strong> O overview, F fit, 0 reset zoom, Esc clear selection</span>
+              </div>
+              <div class="navigation-legend" aria-label="Node and edge meaning">
+                <div class="navigation-legend-row"><strong>Module</strong><span>file-level container</span></div>
+                <div class="navigation-legend-row"><strong>Class</strong><span>object scope and methods</span></div>
+                <div class="navigation-legend-row"><strong>Function</strong><span>callable execution step</span></div>
+                <div class="navigation-legend-row"><strong>Variable</strong><span>state/value node</span></div>
+                <div class="navigation-legend-row"><strong>Call edge</strong><span>function invokes function</span></div>
+                <div class="navigation-legend-row"><strong>Dependency edge</strong><span>import/reference link</span></div>
+                <div class="navigation-legend-row"><strong>Data-flow edge</strong><span>value transformation path</span></div>
+                <div class="navigation-legend-row"><strong>Execution edge</strong><span>runtime trace transition</span></div>
+              </div>
             </div>
           </div>
-          <div class="focus-panel" aria-label="Graph focus controls">
-            <h3>Focus</h3>
+          <div id="explore-panel" class="focus-panel" aria-label="Explore controls">
+            <h3>Explore</h3>
             <label class="focus-control">
-              <span>Selected file</span>
-              <select id="focus-file">
-                <option value="all">All files</option>
-              </select>
-            </label>
-            <label class="focus-toggle">
-              <input id="focus-neighborhood" type="checkbox" />
-              <span>Neighborhood only</span>
-            </label>
-            <label class="focus-control">
-              <span>Dependency traversal</span>
+              <span>Direction</span>
               <select id="dependency-direction">
                 <option value="both" selected>Upstream + downstream</option>
                 <option value="upstream">Upstream only</option>
@@ -1353,14 +1346,14 @@ class FlowDEPanel implements vscode.Disposable {
               </select>
             </label>
             <label class="focus-control">
-              <span>Hop depth</span>
+              <span>Depth</span>
               <div class="focus-slider-row">
                 <input id="dependency-hops" type="range" min="1" max="8" step="1" value="3" />
                 <span id="dependency-hops-value">3</span>
               </div>
             </label>
             <label class="focus-control">
-              <span>Unrelated nodes</span>
+              <span>Scope</span>
               <select id="focus-visibility">
                 <option value="dim" selected>Dim them</option>
                 <option value="hide">Hide them</option>
@@ -1373,8 +1366,20 @@ class FlowDEPanel implements vscode.Disposable {
                 <span id="layout-spacing-value">3</span>
               </div>
             </label>
+            <div id="explore-advanced-scope" class="panel-hidden">
+              <label class="focus-control">
+                <span>Selected file</span>
+                <select id="focus-file">
+                  <option value="all">All files</option>
+                </select>
+              </label>
+              <label class="focus-toggle">
+                <input id="focus-neighborhood" type="checkbox" />
+                <span>Neighborhood only</span>
+              </label>
+              <button id="focus-clear-btn" type="button">Clear focus</button>
+            </div>
             <p id="dependency-status" class="dependency-status">Select a node to analyze dependency impact.</p>
-            <button id="focus-clear-btn" type="button">Clear focus</button>
           </div>
           <div id="layer-panel" class="layer-panel" aria-label="Graph layer controls">
             <h3>Graph Layers</h3>
@@ -1549,7 +1554,7 @@ class FlowDEPanel implements vscode.Disposable {
             </div>
             <div id="dataflow-status" class="dataflow-status">Select a source node to trace data transformations.</div>
           </div>
-          <div class="node-inspector-panel" aria-label="Node inspector">
+          <div id="node-inspector-panel" class="node-inspector-panel" aria-label="Node inspector">
             <h3>Selection</h3>
             <div id="node-inspector" class="node-inspector">Click a node to inspect dependencies.</div>
             <button id="open-source-btn" type="button" disabled>Open source</button>

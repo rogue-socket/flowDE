@@ -71,10 +71,12 @@ body {
 
 #view-mode-btn {
   border-color: color-mix(in srgb, #7ae582 35%, var(--panel-border));
+  background: color-mix(in srgb, var(--button-bg) 88%, #7ae582 8%);
 }
 
 #view-mode-btn.mode-full {
   border-color: color-mix(in srgb, #f4a261 45%, var(--panel-border));
+  background: color-mix(in srgb, var(--button-bg) 86%, #f4a261 10%);
 }
 
 .toolbar-actions button:disabled {
@@ -182,6 +184,11 @@ body {
   background: var(--button-hover);
 }
 
+#advanced-navigation-panel {
+  display: grid;
+  gap: 7px;
+}
+
 .journey-panel {
   display: grid;
   gap: 6px;
@@ -222,6 +229,10 @@ body {
   color: var(--muted-fg);
   font-size: 10px;
   line-height: 1.4;
+}
+
+#workflow-context {
+  color: color-mix(in srgb, var(--panel-fg) 74%, transparent);
 }
 
 .trail-status {
@@ -334,6 +345,13 @@ body {
   align-items: center;
   font-size: 10px;
   color: var(--muted-fg);
+}
+
+#explore-advanced-scope {
+  display: grid;
+  gap: 6px;
+  border-top: 1px dashed var(--panel-border);
+  padding-top: 6px;
 }
 
 .node-inspector {

@@ -250,6 +250,7 @@ const journeyStartButton = getRequiredElement<HTMLButtonElement>('#journey-start
 const journeyPrevButton = getRequiredElement<HTMLButtonElement>('#journey-prev-btn');
 const journeyNextButton = getRequiredElement<HTMLButtonElement>('#journey-next-btn');
 const journeyClearButton = getRequiredElement<HTMLButtonElement>('#journey-clear-btn');
+const workflowContext = getRequiredElement<HTMLElement>('#workflow-context');
 const journeyMeta = getRequiredElement<HTMLElement>('#journey-meta');
 const journeyStatus = getRequiredElement<HTMLElement>('#journey-status');
 const trailStatus = getRequiredElement<HTMLElement>('#trail-status');
@@ -302,6 +303,10 @@ const zoomOutButton = getRequiredElement<HTMLButtonElement>('#zoom-out-btn');
 const zoomResetButton = getRequiredElement<HTMLButtonElement>('#zoom-reset-btn');
 const zoomInButton = getRequiredElement<HTMLButtonElement>('#zoom-in-btn');
 const refreshButton = getRequiredElement<HTMLButtonElement>('#refresh-btn');
+const advancedNavigationPanel = getRequiredElement<HTMLElement>('#advanced-navigation-panel');
+const explorePanel = getRequiredElement<HTMLElement>('#explore-panel');
+const exploreAdvancedScope = getRequiredElement<HTMLElement>('#explore-advanced-scope');
+const nodeInspectorPanel = getRequiredElement<HTMLElement>('#node-inspector-panel');
 const layerPanel = getRequiredElement<HTMLElement>('#layer-panel');
 const abstractionPanel = getRequiredElement<HTMLElement>('#abstraction-panel');
 const reductionPanel = getRequiredElement<HTMLElement>('#reduction-panel');
@@ -336,6 +341,10 @@ const callEdgeByPair = new Map<string, string>();
 const anyEdgeByPair = new Map<string, string>();
 const edgeCatalog = new Map<string, GraphEdge>();
 const advancedPanels: HTMLElement[] = [
+  advancedNavigationPanel,
+  explorePanel,
+  exploreAdvancedScope,
+  nodeInspectorPanel,
   layerPanel,
   abstractionPanel,
   reductionPanel,
@@ -1509,7 +1518,7 @@ abstractionAutoToggle.checked = graphAbstraction.autoByZoom;
 journeyModeSelect.value = journeyState.mode;
 syncAbstractionLevelFromZoom(false);
 setGuidedMode(true, false);
-updateNavigationStatus('Guided mode active. Start with Show full map, then click a node to drill in.');
+updateNavigationStatus('Simple workflow active. Pick Journey mode, choose entry, then Start.');
 updateJourneyUi();
 callPathDepth.value = String(callPathExplorer.maxDepth);
 callPathDepthValue.textContent = String(callPathExplorer.maxDepth);
@@ -2572,6 +2581,10 @@ function updateJourneyUi(message?: string): void {
   const total = journeyState.nodeIds.length;
   const currentStep = journeyState.enabled && total > 0 ? journeyState.currentIndex + 1 : 0;
   journeyMeta.textContent = `Step ${currentStep} / ${total}`;
+  workflowContext.textContent =
+    journeyState.mode === 'file'
+      ? 'File Flow keeps traversal at file/module level.'
+      : 'Code Flow drills into callable paths and decisions.';
 
   journeyPrevButton.disabled = !journeyState.enabled || journeyState.currentIndex <= 0;
   journeyNextButton.disabled = !journeyState.enabled || journeyState.currentIndex >= total - 1;
@@ -2868,7 +2881,7 @@ function applyJourneyHighlighting(): void {
  */
 function setGuidedMode(enabled: boolean, rerender: boolean): void {
   guidedModeEnabled = enabled;
-  viewModeButton.textContent = enabled ? 'Mode: Guided' : 'Mode: Full';
+  viewModeButton.textContent = enabled ? 'Advanced: Off' : 'Advanced: On';
   viewModeButton.classList.toggle('mode-full', !enabled);
 
   for (const panel of advancedPanels) {
@@ -2900,7 +2913,7 @@ function setGuidedMode(enabled: boolean, rerender: boolean): void {
       fitGraphToCurrentView();
     }
 
-    updateNavigationStatus('Guided mode: core controls only, stable zoom, advanced tools minimized.');
+    updateNavigationStatus('Advanced tools hidden. Use Workflow controls for path-first exploration.');
   } else {
     declutterState.visibilityMode = 'dim';
     focusVisibilitySelect.value = 'dim';
@@ -2909,7 +2922,7 @@ function setGuidedMode(enabled: boolean, rerender: boolean): void {
       rerenderGraphFromSource();
     }
 
-    updateNavigationStatus('Full mode: all analysis panels are visible.');
+    updateNavigationStatus('Advanced tools visible. Explore controls and deep analysis are enabled.');
   }
 
   updateJourneyUi();
