@@ -71,6 +71,11 @@ interface FlowFilters {
   moduleId: string;
 }
 
+interface FocusFilters {
+  moduleNodeId: string;
+  neighborhoodOnly: boolean;
+}
+
 interface MinimapTransform {
   scale: number;
   offsetX: number;
@@ -83,6 +88,11 @@ const minimapCanvas = getRequiredElement<HTMLCanvasElement>('#minimap-canvas');
 const minimapContext = getRequiredCanvasContext(minimapCanvas);
 const statusText = getRequiredElement<HTMLElement>('#status');
 const flowMeta = getRequiredElement<HTMLElement>('#flow-meta');
+const focusFile = getRequiredElement<HTMLSelectElement>('#focus-file');
+const focusNeighborhood = getRequiredElement<HTMLInputElement>('#focus-neighborhood');
+const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
+const nodeInspector = getRequiredElement<HTMLElement>('#node-inspector');
+const openSourceButton = getRequiredElement<HTMLButtonElement>('#open-source-btn');
 const flowMinLength = getRequiredElement<HTMLSelectElement>('#flow-min-length');
 const flowConfidence = getRequiredElement<HTMLInputElement>('#flow-confidence');
 const flowConfidenceValue = getRequiredElement<HTMLElement>('#flow-confidence-value');
@@ -108,6 +118,7 @@ let minimapTransform: MinimapTransform | undefined;
 let flowDefinitions: FlowDefinition[] = [];
 let selectedFlowId: string | undefined;
 let selectedStepIndex: number | undefined;
+let selectedNodeId: string | undefined;
 let playbackTimer: number | undefined;
 let isPlaybackRunning = false;
 const nodeCatalog = new Map<string, GraphNode>();
@@ -118,6 +129,11 @@ const flowFilters: FlowFilters = {
   minSteps: Number.parseInt(flowMinLength.value, 10) || 2,
   minConfidence: Number.parseInt(flowConfidence.value, 10) / 100 || 0,
   moduleId: 'all'
+};
+
+const focusFilters: FocusFilters = {
+  moduleNodeId: 'all',
+  neighborhoodOnly: false
 };
 
 const MIN_ZOOM = 0.2;
@@ -174,6 +190,33 @@ const graph = cytoscape({
       style: {
         'border-width': 3,
         'border-color': '#f4a261'
+      }
+    },
+    {
+      selector: 'node.node-selected',
+      style: {
+        'border-width': 3,
+        'border-color': '#57cc99',
+        'text-opacity': 1,
+        opacity: 1
+      }
+    },
+    {
+      selector: 'node.node-incoming',
+      style: {
+        'border-width': 2,
+        'border-color': '#4cc9f0',
+        opacity: 1,
+        'text-opacity': 1
+      }
+    },
+    {
+      selector: 'node.node-outgoing',
+      style: {
+        'border-width': 2,
+        'border-color': '#f4a261',
+        opacity: 1,
+        'text-opacity': 1
       }
     },
     {
@@ -236,6 +279,24 @@ const graph = cytoscape({
       }
     },
     {
+      selector: 'edge.edge-incoming',
+      style: {
+        width: 2.8,
+        opacity: 1,
+        'line-color': '#4cc9f0',
+        'target-arrow-color': '#4cc9f0'
+      }
+    },
+    {
+      selector: 'edge.edge-outgoing',
+      style: {
+        width: 2.8,
+        opacity: 1,
+        'line-color': '#f4a261',
+        'target-arrow-color': '#f4a261'
+      }
+    },
+    {
       selector: 'edge[type = "call"]',
       style: {
         'line-color': '#f4a261',
@@ -266,8 +327,7 @@ const graph = cytoscape({
 graph.on('tap', 'node', (event: cytoscape.EventObject) => {
   const node = event.target;
   const nodeId = node.id();
-  const filePath = node.data('filePath');
-  const line = node.data('line');
+  selectedNodeId = nodeId;
 
   const activeFlow = getSelectedFlow();
   if (activeFlow) {
@@ -278,15 +338,15 @@ graph.on('tap', 'node', (event: cytoscape.EventObject) => {
       applyFlowHighlighting();
     }
   }
+});
 
-  if (!nodeId || !filePath || typeof line !== 'number') {
+graph.on('dbltap', 'node', (event: cytoscape.EventObject) => {
+  const nodeId = event.target.id();
+  if (!nodeId) {
     return;
   }
 
-  vscode.postMessage({
-    type: 'navigateToNode',
-    nodeId
-  });
+  openNodeSource(nodeId);
 });
 
 refreshButton.addEventListener('click', () => {
@@ -399,8 +459,36 @@ flowClearButton.addEventListener('click', () => {
   stopPlayback();
   selectedFlowId = undefined;
   selectedStepIndex = undefined;
+  selectedNodeId = undefined;
   renderFlowSidebar();
   applyFlowHighlighting();
+});
+
+focusFile.addEventListener('change', () => {
+  focusFilters.moduleNodeId = focusFile.value;
+  applyFlowHighlighting();
+});
+
+focusNeighborhood.addEventListener('change', () => {
+  focusFilters.neighborhoodOnly = focusNeighborhood.checked;
+  applyFlowHighlighting();
+});
+
+focusClearButton.addEventListener('click', () => {
+  selectedNodeId = undefined;
+  focusFilters.moduleNodeId = 'all';
+  focusFilters.neighborhoodOnly = false;
+  focusFile.value = 'all';
+  focusNeighborhood.checked = false;
+  applyFlowHighlighting();
+});
+
+openSourceButton.addEventListener('click', () => {
+  if (!selectedNodeId) {
+    return;
+  }
+
+  openNodeSource(selectedNodeId);
 });
 
 flowPrevButton.addEventListener('click', () => {
@@ -474,6 +562,7 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
 });
 
 updateZoomResetLabel();
+focusNeighborhood.checked = focusFilters.neighborhoodOnly;
 flowConfidenceValue.textContent = `${Math.round(flowFilters.minConfidence * 100)}%`;
 scheduleMinimapRender();
 vscode.postMessage({ type: 'ready' });
@@ -498,6 +587,7 @@ function renderGraph(graphData: GraphData): void {
     callEdgeByPair.set(flowPairKey(edge.source, edge.target), edge.id);
   }
 
+  syncFocusFileOptions(graphData);
   syncModuleFilterOptions(graphData);
 
   const elements = [
@@ -625,10 +715,13 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
 }
 
 function applyFlowHighlighting(): void {
-  graph.elements().removeClass('dimmed flow-node flow-edge flow-current flow-current-edge');
+  graph.elements().removeClass(
+    'dimmed flow-node flow-edge flow-current flow-current-edge node-selected node-incoming node-outgoing edge-incoming edge-outgoing'
+  );
 
   const activeFlow = getSelectedFlow();
   if (!activeFlow) {
+    applyFocusFilters();
     renderExplainPanel(undefined);
     updatePlaybackControls();
     scheduleMinimapRender();
@@ -671,6 +764,8 @@ function applyFlowHighlighting(): void {
       }
     }
   }
+
+  applyFocusFilters();
 
   renderExplainPanel(activeFlow);
   updatePlaybackControls();
@@ -896,6 +991,181 @@ function syncModuleFilterOptions(graphData: GraphData): void {
   const resolvedValue = options.some((option) => option.value === previousValue) ? previousValue : 'all';
   flowModule.value = resolvedValue;
   flowFilters.moduleId = resolvedValue;
+}
+
+function syncFocusFileOptions(graphData: GraphData): void {
+  const previousValue = focusFile.value || focusFilters.moduleNodeId;
+  const options = [{ value: 'all', label: 'All files' }];
+
+  graphData.nodes
+    .filter((node) => node.type === 'module' && !node.metadata?.external)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .forEach((moduleNode) => {
+      options.push({ value: moduleNode.id, label: moduleNode.name });
+    });
+
+  focusFile.replaceChildren();
+  options.forEach((optionData) => {
+    const option = document.createElement('option');
+    option.value = optionData.value;
+    option.textContent = optionData.label;
+    focusFile.appendChild(option);
+  });
+
+  const resolvedValue = options.some((option) => option.value === previousValue) ? previousValue : 'all';
+  focusFile.value = resolvedValue;
+  focusFilters.moduleNodeId = resolvedValue;
+}
+
+function applyFocusFilters(): void {
+  const keepNodeIds = new Set<string>();
+  const keepEdgeIds = new Set<string>();
+
+  if (focusFilters.moduleNodeId !== 'all') {
+    keepNodeIds.add(focusFilters.moduleNodeId);
+
+    for (const [nodeId, node] of nodeCatalog.entries()) {
+      if (node.id === focusFilters.moduleNodeId) {
+        keepNodeIds.add(nodeId);
+        continue;
+      }
+
+      if (getModuleNodeId(node) === focusFilters.moduleNodeId) {
+        keepNodeIds.add(nodeId);
+      }
+    }
+
+    graph.edges().forEach((edge) => {
+      if (keepNodeIds.has(edge.source().id()) && keepNodeIds.has(edge.target().id())) {
+        keepEdgeIds.add(edge.id());
+      }
+    });
+
+    graph.nodes().forEach((node) => {
+      if (!keepNodeIds.has(node.id())) {
+        node.addClass('dimmed');
+      }
+    });
+
+    graph.edges().forEach((edge) => {
+      if (!keepEdgeIds.has(edge.id())) {
+        edge.addClass('dimmed');
+      }
+    });
+  }
+
+  applyDependencyHighlighting();
+}
+
+function applyDependencyHighlighting(): void {
+  updateNodeInspector();
+
+  if (!selectedNodeId) {
+    return;
+  }
+
+  const selectedNode = graph.getElementById(selectedNodeId);
+  if (selectedNode.length === 0) {
+    return;
+  }
+
+  selectedNode.addClass('node-selected');
+
+  const incomingEdges = selectedNode.incomers('edge');
+  const outgoingEdges = selectedNode.outgoers('edge');
+  const incomingNodes = incomingEdges.sources();
+  const outgoingNodes = outgoingEdges.targets();
+
+  incomingEdges.addClass('edge-incoming');
+  outgoingEdges.addClass('edge-outgoing');
+  incomingNodes.addClass('node-incoming');
+  outgoingNodes.addClass('node-outgoing');
+
+  if (!focusFilters.neighborhoodOnly) {
+    return;
+  }
+
+  const neighborhoodNodeIds = new Set<string>([
+    selectedNodeId,
+    ...incomingNodes.map((node) => node.id()),
+    ...outgoingNodes.map((node) => node.id())
+  ]);
+
+  const selectedNodeMeta = nodeCatalog.get(selectedNodeId);
+  const moduleNodeId = selectedNodeMeta ? getModuleNodeId(selectedNodeMeta) : undefined;
+  if (moduleNodeId) {
+    neighborhoodNodeIds.add(moduleNodeId);
+  }
+
+  const neighborhoodEdgeIds = new Set<string>([
+    ...incomingEdges.map((edge) => edge.id()),
+    ...outgoingEdges.map((edge) => edge.id())
+  ]);
+
+  graph.nodes().forEach((node) => {
+    if (!neighborhoodNodeIds.has(node.id())) {
+      node.addClass('dimmed');
+    }
+  });
+
+  graph.edges().forEach((edge) => {
+    if (!neighborhoodEdgeIds.has(edge.id())) {
+      edge.addClass('dimmed');
+    }
+  });
+}
+
+function openNodeSource(nodeId: string): void {
+  const node = nodeCatalog.get(nodeId);
+  if (!node || !node.filePath || typeof node.line !== 'number') {
+    return;
+  }
+
+  vscode.postMessage({
+    type: 'navigateToNode',
+    nodeId
+  });
+}
+
+function updateNodeInspector(): void {
+  if (!selectedNodeId) {
+    nodeInspector.textContent = 'Click a node to inspect dependencies.';
+    openSourceButton.disabled = true;
+    return;
+  }
+
+  const node = nodeCatalog.get(selectedNodeId);
+  if (!node) {
+    nodeInspector.textContent = 'Selected node is no longer available.';
+    openSourceButton.disabled = true;
+    return;
+  }
+
+  const cyNode = graph.getElementById(selectedNodeId);
+  const incomingCount = cyNode.length > 0 ? cyNode.incomers('edge').length : 0;
+  const outgoingCount = cyNode.length > 0 ? cyNode.outgoers('edge').length : 0;
+
+  const lines = [
+    `Node: ${node.name}`,
+    `Type: ${node.type}`,
+    `Incoming: ${incomingCount}`,
+    `Outgoing: ${outgoingCount}`
+  ];
+
+  const moduleNodeId = getModuleNodeId(node);
+  if (moduleNodeId) {
+    const moduleNode = nodeCatalog.get(moduleNodeId);
+    if (moduleNode?.name) {
+      lines.push(`File: ${moduleNode.name}`);
+    }
+  }
+
+  if (node.filePath && typeof node.line === 'number') {
+    lines.push(`Location: ${node.filePath}:${node.line}`);
+  }
+
+  nodeInspector.textContent = lines.join('\n');
+  openSourceButton.disabled = !(node.filePath && typeof node.line === 'number');
 }
 
 function startPlayback(): void {

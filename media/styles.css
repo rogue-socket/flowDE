@@ -114,6 +114,79 @@ body {
   font-weight: 600;
 }
 
+.focus-panel,
+.node-inspector-panel {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--panel-bg) 90%, black 4%);
+}
+
+.focus-panel h3,
+.node-inspector-panel h3 {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted-fg);
+  font-weight: 600;
+}
+
+.focus-control {
+  display: grid;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--muted-fg);
+}
+
+.focus-control select,
+#focus-clear-btn,
+#open-source-btn {
+  appearance: none;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--button-bg);
+  color: var(--panel-fg);
+  font-size: 11px;
+  padding: 5px 7px;
+}
+
+#focus-clear-btn,
+#open-source-btn {
+  cursor: pointer;
+}
+
+#focus-clear-btn:hover,
+#open-source-btn:hover,
+.focus-control select:hover {
+  background: var(--button-hover);
+}
+
+#open-source-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.focus-toggle {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 10px;
+  color: var(--muted-fg);
+}
+
+.node-inspector {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-bg) 88%, black 5%);
+  color: var(--muted-fg);
+  font-size: 10px;
+  line-height: 1.45;
+  min-height: 56px;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
 .flow-controls {
   display: grid;
   gap: 7px;

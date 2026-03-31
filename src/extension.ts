@@ -226,6 +226,25 @@ class FlowDEPanel implements vscode.Disposable {
             <h2>Flows</h2>
             <span id="flow-meta">0 discovered</span>
           </div>
+          <div class="focus-panel" aria-label="Graph focus controls">
+            <h3>Focus</h3>
+            <label class="focus-control">
+              <span>Selected file</span>
+              <select id="focus-file">
+                <option value="all">All files</option>
+              </select>
+            </label>
+            <label class="focus-toggle">
+              <input id="focus-neighborhood" type="checkbox" />
+              <span>Neighborhood only</span>
+            </label>
+            <button id="focus-clear-btn" type="button">Clear focus</button>
+          </div>
+          <div class="node-inspector-panel" aria-label="Node inspector">
+            <h3>Selection</h3>
+            <div id="node-inspector" class="node-inspector">Click a node to inspect dependencies.</div>
+            <button id="open-source-btn" type="button" disabled>Open source</button>
+          </div>
           <div class="flow-controls" aria-label="Flow controls">
             <label class="flow-control">
               <span>Min steps</span>
