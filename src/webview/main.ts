@@ -122,6 +122,12 @@ interface DeclutterState {
   layoutSpacing: number;
 }
 
+interface DrillTrailState {
+  enabled: boolean;
+  nodeSequence: string[];
+  edgeSequence: string[];
+}
+
 type DependencyDirection = 'upstream' | 'downstream' | 'both';
 
 interface DependencyTraversalState {
@@ -353,6 +359,12 @@ const declutterState: DeclutterState = {
   layoutSpacing: Number.parseInt(layoutSpacing.value, 10) || 3
 };
 
+const drillTrailState: DrillTrailState = {
+  enabled: false,
+  nodeSequence: [],
+  edgeSequence: []
+};
+
 const dependencyTraversal: DependencyTraversalState = {
   direction: (dependencyDirection.value as DependencyDirection) || 'both',
   maxHops: Number.parseInt(dependencyHops.value, 10) || 3
@@ -520,6 +532,15 @@ const graph = cytoscape({
       }
     },
     {
+      selector: 'node.trail-node',
+      style: {
+        'border-width': 2,
+        'border-color': '#8ecae6',
+        opacity: 1,
+        'text-opacity': 1
+      }
+    },
+    {
       selector: 'node.execution-visited',
       style: {
         'border-width': 2,
@@ -655,6 +676,15 @@ const graph = cytoscape({
       }
     },
     {
+      selector: 'edge.trail-edge',
+      style: {
+        width: 2.2,
+        opacity: 0.95,
+        'line-color': '#8ecae6',
+        'target-arrow-color': '#8ecae6'
+      }
+    },
+    {
       selector: 'edge.execution-traversed',
       style: {
         width: 3.1,
@@ -720,8 +750,10 @@ const graph = cytoscape({
 
 graph.on('tap', 'node', (event: cytoscape.EventObject) => {
   const node = event.target;
+  const previousNodeId = selectedNodeId;
   const nodeId = node.id();
   selectedNodeId = nodeId;
+  recordDrillSelection(previousNodeId, nodeId);
 
   if (journeyState.enabled) {
     const nextIndex = journeyState.nodeIds.indexOf(nodeId);
@@ -877,6 +909,7 @@ journeyEntrySelect.addEventListener('change', () => {
 });
 
 journeyStartButton.addEventListener('click', () => {
+  clearDrillTrail();
   startJourney();
 });
 
@@ -895,6 +928,7 @@ journeyClearButton.addEventListener('click', () => {
 
 flowList.addEventListener('click', (event) => {
   clearJourney();
+  clearDrillTrail();
   const target = event.target as HTMLElement | null;
   const button = target?.closest<HTMLButtonElement>('button[data-flow-id]');
   if (!button) {
@@ -1030,6 +1064,7 @@ callPathDepth.addEventListener('input', () => {
 
 callPathRunButton.addEventListener('click', () => {
   clearJourney();
+  clearDrillTrail();
   callPathExplorer.entryNodeId = callPathEntry.value;
   if (!callPathExplorer.entryNodeId) {
     callPathStatus.textContent = 'Select an entry function to explore call paths.';
@@ -1074,6 +1109,7 @@ dataFlowHops.addEventListener('input', () => {
 
 dataFlowRunButton.addEventListener('click', () => {
   clearJourney();
+  clearDrillTrail();
   dataFlowExplorer.sourceNodeId = dataFlowSource.value || selectedNodeId || '';
   if (!dataFlowExplorer.sourceNodeId) {
     dataFlowStatus.textContent = 'Select a source node to trace data flow.';
@@ -1097,6 +1133,7 @@ dataFlowClearButton.addEventListener('click', () => {
 
 focusClearButton.addEventListener('click', () => {
   clearJourney('Journey cleared.');
+  clearDrillTrail();
   selectedNodeId = undefined;
   focusFilters.moduleNodeId = 'all';
   focusFilters.neighborhoodOnly = false;
@@ -1493,6 +1530,12 @@ function renderGraph(graphData: GraphData): void {
     callEdgeByPair.set(pairKey, edge.id);
   }
 
+  drillTrailState.nodeSequence = drillTrailState.nodeSequence.filter((nodeId) => nodeCatalog.has(nodeId));
+  drillTrailState.edgeSequence = drillTrailState.edgeSequence.filter((edgeId) => edgeCatalog.has(edgeId));
+  if (drillTrailState.nodeSequence.length === 0) {
+    clearDrillTrail();
+  }
+
   if (selectedNodeId && !nodeCatalog.has(selectedNodeId)) {
     selectedNodeId = undefined;
   }
@@ -1643,13 +1686,14 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
 
 function applyFlowHighlighting(): void {
   graph.elements().removeClass(
-    'dimmed hidden-by-scope flow-node flow-edge flow-current flow-current-edge node-selected node-incoming node-outgoing node-impact node-dataflow edge-incoming edge-outgoing edge-impact edge-dataflow execution-visited execution-active execution-traversed'
+    'dimmed hidden-by-scope flow-node flow-edge flow-current flow-current-edge trail-node trail-edge node-selected node-incoming node-outgoing node-impact node-dataflow edge-incoming edge-outgoing edge-impact edge-dataflow execution-visited execution-active execution-traversed'
   );
 
   const activeFlow = getSelectedFlow();
   if (!activeFlow) {
     applyFocusFilters();
     applyJourneyHighlighting();
+    applyDrillTrailHighlighting();
     renderExplainPanel(undefined);
     updatePlaybackControls();
     applyExecutionOverlay(false);
@@ -1696,6 +1740,7 @@ function applyFlowHighlighting(): void {
 
   applyFocusFilters();
   applyJourneyHighlighting();
+  applyDrillTrailHighlighting();
 
   renderExplainPanel(activeFlow);
   updatePlaybackControls();
@@ -2095,6 +2140,91 @@ function updateNavigationStatus(message: string): void {
   navigationStatus.textContent = message;
 }
 
+function clearDrillTrail(): void {
+  drillTrailState.enabled = false;
+  drillTrailState.nodeSequence = [];
+  drillTrailState.edgeSequence = [];
+}
+
+function uniqueOrdered(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function getDrillTrailNodeIds(): string[] {
+  if (!drillTrailState.enabled) {
+    return [];
+  }
+  return uniqueOrdered(drillTrailState.nodeSequence);
+}
+
+function getDrillTrailEdgeIds(): string[] {
+  if (!drillTrailState.enabled) {
+    return [];
+  }
+  return uniqueOrdered(drillTrailState.edgeSequence);
+}
+
+function resolveTrailEdgeId(sourceNodeId: string, targetNodeId: string): string | undefined {
+  const direct = anyEdgeByPair.get(flowPairKey(sourceNodeId, targetNodeId));
+  if (direct) {
+    return direct;
+  }
+
+  const reverse = anyEdgeByPair.get(flowPairKey(targetNodeId, sourceNodeId));
+  return reverse;
+}
+
+function recordDrillSelection(previousNodeId: string | undefined, currentNodeId: string): void {
+  if (!nodeCatalog.has(currentNodeId)) {
+    return;
+  }
+
+  if (!drillTrailState.enabled) {
+    drillTrailState.enabled = true;
+  }
+
+  const sequence = drillTrailState.nodeSequence;
+  if (sequence[sequence.length - 1] !== currentNodeId) {
+    sequence.push(currentNodeId);
+  }
+
+  if (!previousNodeId || previousNodeId === currentNodeId) {
+    return;
+  }
+
+  if (!nodeCatalog.has(previousNodeId)) {
+    return;
+  }
+
+  const edgeId = resolveTrailEdgeId(previousNodeId, currentNodeId);
+  if (edgeId) {
+    drillTrailState.edgeSequence.push(edgeId);
+  }
+}
+
+function applyDrillTrailHighlighting(): void {
+  if (!drillTrailState.enabled) {
+    return;
+  }
+
+  for (const nodeId of getDrillTrailNodeIds()) {
+    graph.getElementById(nodeId).addClass('trail-node').removeClass('dimmed').removeClass('hidden-by-scope');
+  }
+
+  for (const edgeId of getDrillTrailEdgeIds()) {
+    graph.getElementById(edgeId).addClass('trail-edge').removeClass('dimmed').removeClass('hidden-by-scope');
+  }
+}
+
 interface DrilldownOptionsSnapshot {
   incomingNodeIds: string[];
   outgoingNodeIds: string[];
@@ -2200,6 +2330,30 @@ function applyNodeDrilldownLayout(nodeId: string): void {
 
   assignSide(snapshot.incomingNodeIds, 'left');
   assignSide(snapshot.outgoingNodeIds, 'right');
+
+  const trailNodeIds = getDrillTrailNodeIds().filter(
+    (trailNodeId) => trailNodeId !== nodeId && !positions.has(trailNodeId)
+  );
+  if (trailNodeIds.length > 0) {
+    const trailPerRow = 10;
+    const trailRowGap = 78 * spacingFactor;
+    const trailColGap = 118 * spacingFactor;
+    const trailBaseY = -230 * spacingFactor;
+
+    trailNodeIds.forEach((trailNodeId, index) => {
+      const element = graph.getElementById(trailNodeId);
+      if (element.length === 0 || element.hasClass('hidden-by-scope')) {
+        return;
+      }
+
+      const row = Math.floor(index / trailPerRow);
+      const indexInRow = index % trailPerRow;
+      const itemsInRow = Math.min(trailPerRow, trailNodeIds.length - row * trailPerRow);
+      const x = (indexInRow - (itemsInRow - 1) / 2) * trailColGap;
+      const y = trailBaseY - row * trailRowGap;
+      positions.set(trailNodeId, { x, y });
+    });
+  }
 
   const neighborhood = graph.collection();
   for (const [targetId, point] of positions.entries()) {
@@ -2595,6 +2749,7 @@ function clearExplorationOverlays(): void {
 
 function applyOverviewMode(): void {
   clearJourney('Journey cleared.');
+  clearDrillTrail();
   stopPlayback();
   selectedFlowId = undefined;
   selectedStepIndex = undefined;
@@ -2652,6 +2807,7 @@ function followCurrentSelection(): void {
 
 function resetNavigationState(): void {
   clearJourney('Journey cleared.');
+  clearDrillTrail();
   stopPlayback();
   selectedFlowId = undefined;
   selectedStepIndex = undefined;
@@ -3602,6 +3758,14 @@ function applyDependencyHighlighting(): void {
     ...analysis.upstreamEdgeIds,
     ...analysis.downstreamEdgeIds
   ]);
+
+  for (const trailNodeId of getDrillTrailNodeIds()) {
+    neighborhoodNodeIds.add(trailNodeId);
+  }
+
+  for (const trailEdgeId of getDrillTrailEdgeIds()) {
+    neighborhoodEdgeIds.add(trailEdgeId);
+  }
 
   applyScopeMasking(neighborhoodNodeIds, neighborhoodEdgeIds);
 
