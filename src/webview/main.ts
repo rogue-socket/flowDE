@@ -250,6 +250,7 @@ const journeyClearButton = getRequiredElement<HTMLButtonElement>('#journey-clear
 const journeyMeta = getRequiredElement<HTMLElement>('#journey-meta');
 const journeyStatus = getRequiredElement<HTMLElement>('#journey-status');
 const trailStatus = getRequiredElement<HTMLElement>('#trail-status');
+const trailHistory = getRequiredElement<HTMLOListElement>('#trail-history');
 const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
 const layerStructuralToggle = getRequiredElement<HTMLInputElement>('#layer-structural');
 const layerDependencyToggle = getRequiredElement<HTMLInputElement>('#layer-dependency');
@@ -2217,22 +2218,22 @@ function getDrillTrailEdgeIds(): string[] {
 }
 
 function updateDrillTrailStatus(): void {
-  const trailNodeIds = getDrillTrailNodeIds();
-  if (trailNodeIds.length === 0) {
+  const sequence = drillTrailState.nodeSequence;
+  if (sequence.length === 0) {
     trailStatus.textContent = 'Chosen path: none';
+    trailHistory.replaceChildren();
     return;
   }
 
-  const labels = trailNodeIds.map((nodeId) => nodeCatalog.get(nodeId)?.name ?? nodeId);
-  const full = labels.join(' -> ');
-  if (full.length <= 190) {
-    trailStatus.textContent = `Chosen path (${labels.length}): ${full}`;
-    return;
-  }
+  trailStatus.textContent = `Chosen path history (${sequence.length} steps):`;
+  trailHistory.replaceChildren();
 
-  const head = labels.slice(0, 3).join(' -> ');
-  const tail = labels.slice(-3).join(' -> ');
-  trailStatus.textContent = `Chosen path (${labels.length}): ${head} -> ... -> ${tail}`;
+  sequence.forEach((nodeId, index) => {
+    const item = document.createElement('li');
+    const nodeName = nodeCatalog.get(nodeId)?.name ?? nodeId;
+    item.textContent = `${index + 1}. ${nodeName}`;
+    trailHistory.appendChild(item);
+  });
 }
 
 function resolveTrailEdgeId(sourceNodeId: string, targetNodeId: string): string | undefined {

@@ -235,6 +235,23 @@ body {
   white-space: pre-wrap;
 }
 
+.trail-history {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 130px;
+  overflow: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-bg) 88%, black 5%);
+}
+
+.trail-history li {
+  color: var(--muted-fg);
+  font-size: 10px;
+  line-height: 1.35;
+  margin: 4px 8px 4px 0;
+}
+
 .navigation-status,
 .navigation-shortcuts {
   margin: 0;
