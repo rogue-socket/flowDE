@@ -27,6 +27,8 @@ And it keeps the text-first workflow intact by letting you click a node and jump
 - Node runtime state inspection (inputs, outputs, intermediate locals)
 - Graph-native editing controls (create/connect/rename/move)
 - Bi-directional graph-code sync via direct code edits + file watcher refresh
+- Entry-point call path exploration with branching-aware path enumeration
+- Data-flow tracing across variables/functions with forward/backward traversal
 
 ## Architecture
 
@@ -85,6 +87,13 @@ Graph editing and control strategy:
 - Rename Node: applies identifier rename across Python files with conflict checks
 - Move Function: extracts a top-level function block and appends it to a target module
 - Conflict handling: stale mapping, duplicate definitions, invalid identifiers, and unsupported method moves are rejected with explicit error messages
+
+Call path and data flow strategy:
+
+- Call Path Explorer: pick an entry function and enumerate possible transitive call paths with configurable max depth
+- Branching visibility: path exploration captures multiple branch outcomes and reports touched branch points
+- Data Flow Explorer: pick a source node and trace forward/backward transformation propagation over dataflow (+ call-assisted) edges
+- Impact overlays: traced paths and transformations are rendered directly in the graph with live counts in the sidebar
 
 ### 3. Webview Frontend
 

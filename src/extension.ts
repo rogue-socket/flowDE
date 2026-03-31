@@ -1293,6 +1293,56 @@ class FlowDEPanel implements vscode.Disposable {
             </div>
             <div id="graph-edit-status" class="graph-edit-status">Idle</div>
           </div>
+          <div class="call-path-panel" aria-label="Call path exploration controls">
+            <h3>Call Path Explorer</h3>
+            <label class="focus-control">
+              <span>Entry point</span>
+              <select id="callpath-entry">
+                <option value="">Select entry function</option>
+              </select>
+            </label>
+            <label class="focus-control">
+              <span>Max depth</span>
+              <div class="focus-slider-row">
+                <input id="callpath-depth" type="range" min="2" max="14" step="1" value="8" />
+                <span id="callpath-depth-value">8</span>
+              </div>
+            </label>
+            <div class="call-path-actions">
+              <button id="callpath-run-btn" type="button">Explore Paths</button>
+              <button id="callpath-clear-btn" type="button">Clear</button>
+            </div>
+            <div id="callpath-status" class="callpath-status">Auto mode: discovering broad flow patterns.</div>
+          </div>
+          <div class="dataflow-panel" aria-label="Data flow exploration controls">
+            <h3>Data Flow Explorer</h3>
+            <label class="focus-control">
+              <span>Source node</span>
+              <select id="dataflow-source">
+                <option value="">Select source node</option>
+              </select>
+            </label>
+            <label class="focus-control">
+              <span>Direction</span>
+              <select id="dataflow-direction">
+                <option value="forward" selected>Forward</option>
+                <option value="backward">Backward</option>
+                <option value="both">Both</option>
+              </select>
+            </label>
+            <label class="focus-control">
+              <span>Max hops</span>
+              <div class="focus-slider-row">
+                <input id="dataflow-hops" type="range" min="1" max="10" step="1" value="4" />
+                <span id="dataflow-hops-value">4</span>
+              </div>
+            </label>
+            <div class="call-path-actions">
+              <button id="dataflow-run-btn" type="button">Trace Data Flow</button>
+              <button id="dataflow-clear-btn" type="button">Clear</button>
+            </div>
+            <div id="dataflow-status" class="dataflow-status">Select a source node to trace data transformations.</div>
+          </div>
           <div class="node-inspector-panel" aria-label="Node inspector">
             <h3>Selection</h3>
             <div id="node-inspector" class="node-inspector">Click a node to inspect dependencies.</div>

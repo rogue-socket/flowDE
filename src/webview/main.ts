@@ -130,6 +130,30 @@ interface DependencyAnalysisSnapshot {
   blastRadiusNodeCount: number;
 }
 
+interface CallPathExplorerState {
+  enabled: boolean;
+  entryNodeId: string;
+  maxDepth: number;
+}
+
+type DataFlowDirection = 'forward' | 'backward' | 'both';
+
+interface DataFlowExplorerState {
+  enabled: boolean;
+  sourceNodeId: string;
+  direction: DataFlowDirection;
+  maxHops: number;
+}
+
+interface DataFlowAnalysisSnapshot {
+  sourceNodeId: string;
+  nodeIds: Set<string>;
+  edgeIds: Set<string>;
+  forwardCount: number;
+  backwardCount: number;
+  transformationCount: number;
+}
+
 interface ReductionState {
   collapseInternalFunctions: boolean;
   collapseLibraries: boolean;
@@ -162,6 +186,19 @@ const dependencyDirection = getRequiredElement<HTMLSelectElement>('#dependency-d
 const dependencyHops = getRequiredElement<HTMLInputElement>('#dependency-hops');
 const dependencyHopsValue = getRequiredElement<HTMLElement>('#dependency-hops-value');
 const dependencyStatus = getRequiredElement<HTMLElement>('#dependency-status');
+const callPathEntry = getRequiredElement<HTMLSelectElement>('#callpath-entry');
+const callPathDepth = getRequiredElement<HTMLInputElement>('#callpath-depth');
+const callPathDepthValue = getRequiredElement<HTMLElement>('#callpath-depth-value');
+const callPathRunButton = getRequiredElement<HTMLButtonElement>('#callpath-run-btn');
+const callPathClearButton = getRequiredElement<HTMLButtonElement>('#callpath-clear-btn');
+const callPathStatus = getRequiredElement<HTMLElement>('#callpath-status');
+const dataFlowSource = getRequiredElement<HTMLSelectElement>('#dataflow-source');
+const dataFlowDirection = getRequiredElement<HTMLSelectElement>('#dataflow-direction');
+const dataFlowHops = getRequiredElement<HTMLInputElement>('#dataflow-hops');
+const dataFlowHopsValue = getRequiredElement<HTMLElement>('#dataflow-hops-value');
+const dataFlowRunButton = getRequiredElement<HTMLButtonElement>('#dataflow-run-btn');
+const dataFlowClearButton = getRequiredElement<HTMLButtonElement>('#dataflow-clear-btn');
+const dataFlowStatus = getRequiredElement<HTMLElement>('#dataflow-status');
 const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
 const layerStructuralToggle = getRequiredElement<HTMLInputElement>('#layer-structural');
 const layerDependencyToggle = getRequiredElement<HTMLInputElement>('#layer-dependency');
@@ -250,6 +287,20 @@ const dependencyTraversal: DependencyTraversalState = {
 };
 
 let latestDependencyAnalysis: DependencyAnalysisSnapshot | undefined;
+const callPathExplorer: CallPathExplorerState = {
+  enabled: false,
+  entryNodeId: '',
+  maxDepth: Number.parseInt(callPathDepth.value, 10) || 8
+};
+
+const dataFlowExplorer: DataFlowExplorerState = {
+  enabled: false,
+  sourceNodeId: '',
+  direction: (dataFlowDirection.value as DataFlowDirection) || 'forward',
+  maxHops: Number.parseInt(dataFlowHops.value, 10) || 4
+};
+
+let latestDataFlowAnalysis: DataFlowAnalysisSnapshot | undefined;
 
 const reductionState: ReductionState = {
   collapseInternalFunctions: collapseFunctionsToggle.checked,
@@ -363,6 +414,15 @@ const graph = cytoscape({
       style: {
         'border-width': 3,
         'border-color': '#ff4d6d',
+        opacity: 1,
+        'text-opacity': 1
+      }
+    },
+    {
+      selector: 'node.node-dataflow',
+      style: {
+        'border-width': 3,
+        'border-color': '#80ed99',
         opacity: 1,
         'text-opacity': 1
       }
@@ -488,6 +548,15 @@ const graph = cytoscape({
       }
     },
     {
+      selector: 'edge.edge-dataflow',
+      style: {
+        width: 2.9,
+        opacity: 1,
+        'line-color': '#80ed99',
+        'target-arrow-color': '#80ed99'
+      }
+    },
+    {
       selector: 'edge.execution-traversed',
       style: {
         width: 3.1,
@@ -560,9 +629,16 @@ graph.on('tap', 'node', (event: cytoscape.EventObject) => {
     editRenameName.value = selectedNode.name;
     if (selectedNode.type === 'function') {
       editConnectSource.value = selectedNode.id;
+      callPathEntry.value = selectedNode.id;
+      callPathExplorer.entryNodeId = selectedNode.id;
       graphEditStatus.textContent = `Selected function ${selectedNode.name} for editing.`;
     } else {
       graphEditStatus.textContent = `Selected ${selectedNode.type} ${selectedNode.name}.`;
+    }
+
+    if (selectedNode.layers.includes('dataflow')) {
+      dataFlowSource.value = selectedNode.id;
+      dataFlowExplorer.sourceNodeId = selectedNode.id;
     }
   }
 
@@ -728,6 +804,87 @@ dependencyHops.addEventListener('input', () => {
   const value = Number.parseInt(dependencyHops.value, 10);
   dependencyTraversal.maxHops = Number.isFinite(value) ? clamp(value, 1, 8) : 3;
   dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
+  applyFlowHighlighting();
+});
+
+callPathEntry.addEventListener('change', () => {
+  callPathExplorer.entryNodeId = callPathEntry.value;
+  if (callPathExplorer.enabled) {
+    applyFlowFilters();
+  }
+});
+
+callPathDepth.addEventListener('input', () => {
+  const value = Number.parseInt(callPathDepth.value, 10);
+  callPathExplorer.maxDepth = Number.isFinite(value) ? clamp(value, 2, 14) : 8;
+  callPathDepthValue.textContent = String(callPathExplorer.maxDepth);
+  if (callPathExplorer.enabled) {
+    applyFlowFilters();
+  }
+});
+
+callPathRunButton.addEventListener('click', () => {
+  callPathExplorer.entryNodeId = callPathEntry.value;
+  if (!callPathExplorer.entryNodeId) {
+    callPathStatus.textContent = 'Select an entry function to explore call paths.';
+    return;
+  }
+
+  callPathExplorer.enabled = true;
+  applyFlowFilters();
+});
+
+callPathClearButton.addEventListener('click', () => {
+  callPathExplorer.enabled = false;
+  callPathStatus.textContent = 'Auto mode: discovering broad flow patterns.';
+  applyFlowFilters();
+});
+
+dataFlowSource.addEventListener('change', () => {
+  dataFlowExplorer.sourceNodeId = dataFlowSource.value;
+  if (dataFlowExplorer.enabled) {
+    applyFlowHighlighting();
+  }
+});
+
+dataFlowDirection.addEventListener('change', () => {
+  const value = dataFlowDirection.value;
+  if (value === 'forward' || value === 'backward' || value === 'both') {
+    dataFlowExplorer.direction = value;
+  }
+  if (dataFlowExplorer.enabled) {
+    applyFlowHighlighting();
+  }
+});
+
+dataFlowHops.addEventListener('input', () => {
+  const value = Number.parseInt(dataFlowHops.value, 10);
+  dataFlowExplorer.maxHops = Number.isFinite(value) ? clamp(value, 1, 10) : 4;
+  dataFlowHopsValue.textContent = String(dataFlowExplorer.maxHops);
+  if (dataFlowExplorer.enabled) {
+    applyFlowHighlighting();
+  }
+});
+
+dataFlowRunButton.addEventListener('click', () => {
+  dataFlowExplorer.sourceNodeId = dataFlowSource.value || selectedNodeId || '';
+  if (!dataFlowExplorer.sourceNodeId) {
+    dataFlowStatus.textContent = 'Select a source node to trace data flow.';
+    return;
+  }
+
+  if (!dataFlowSource.value && dataFlowExplorer.sourceNodeId) {
+    dataFlowSource.value = dataFlowExplorer.sourceNodeId;
+  }
+
+  dataFlowExplorer.enabled = true;
+  applyFlowHighlighting();
+});
+
+dataFlowClearButton.addEventListener('click', () => {
+  dataFlowExplorer.enabled = false;
+  latestDataFlowAnalysis = undefined;
+  dataFlowStatus.textContent = 'Select a source node to trace data transformations.';
   applyFlowHighlighting();
 });
 
@@ -1008,6 +1165,11 @@ focusNeighborhood.checked = focusFilters.neighborhoodOnly;
 dependencyDirection.value = dependencyTraversal.direction;
 dependencyHops.value = String(dependencyTraversal.maxHops);
 dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
+callPathDepth.value = String(callPathExplorer.maxDepth);
+callPathDepthValue.textContent = String(callPathExplorer.maxDepth);
+dataFlowDirection.value = dataFlowExplorer.direction;
+dataFlowHops.value = String(dataFlowExplorer.maxHops);
+dataFlowHopsValue.textContent = String(dataFlowExplorer.maxHops);
 layerStructuralToggle.checked = layerVisibility.structural;
 layerDependencyToggle.checked = layerVisibility.dependency;
 layerDataFlowToggle.checked = layerVisibility.dataflow;
@@ -1055,6 +1217,7 @@ function renderGraph(graphData: GraphData): void {
   syncFocusFileOptions(graphData);
   syncModuleFilterOptions(graphData);
   syncGraphEditOptions(graphData);
+  syncExplorationOptions(graphData);
 
   const elements = [
     ...displayedGraphData.nodes.map((node) => ({
@@ -1194,7 +1357,7 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
 
 function applyFlowHighlighting(): void {
   graph.elements().removeClass(
-    'dimmed flow-node flow-edge flow-current flow-current-edge node-selected node-incoming node-outgoing node-impact edge-incoming edge-outgoing edge-impact execution-visited execution-active execution-traversed'
+    'dimmed flow-node flow-edge flow-current flow-current-edge node-selected node-incoming node-outgoing node-impact node-dataflow edge-incoming edge-outgoing edge-impact edge-dataflow execution-visited execution-active execution-traversed'
   );
 
   const activeFlow = getSelectedFlow();
@@ -1902,7 +2065,19 @@ function applyFlowFilters(): void {
   }
 
   stopPlayback();
-  flowDefinitions = buildFlowDefinitions(latestDisplayedGraphData, flowFilters);
+  if (callPathExplorer.enabled && callPathExplorer.entryNodeId) {
+    flowDefinitions = buildCallPathsFromEntry(latestDisplayedGraphData, flowFilters, callPathExplorer);
+    const branchPoints = countBranchPoints(latestDisplayedGraphData, flowDefinitions);
+    callPathStatus.textContent = [
+      `Entry mode: ${flowDefinitions.length} path${flowDefinitions.length === 1 ? '' : 's'} discovered`,
+      `Entry: ${nodeCatalog.get(callPathExplorer.entryNodeId)?.name ?? callPathExplorer.entryNodeId}`,
+      `Max depth: ${callPathExplorer.maxDepth}`,
+      `Branch points touched: ${branchPoints}`
+    ].join('\n');
+  } else {
+    flowDefinitions = buildFlowDefinitions(latestDisplayedGraphData, flowFilters);
+    callPathStatus.textContent = 'Auto mode: discovering broad flow patterns.';
+  }
 
   if (selectedFlowId && !flowDefinitions.some((flow) => flow.id === selectedFlowId)) {
     selectedFlowId = undefined;
@@ -1911,6 +2086,142 @@ function applyFlowFilters(): void {
 
   renderFlowSidebar();
   applyFlowHighlighting();
+}
+
+function buildCallPathsFromEntry(
+  graphData: GraphData,
+  filters: FlowFilters,
+  explorer: CallPathExplorerState
+): FlowDefinition[] {
+  const functionNodes = graphData.nodes.filter((node) => node.type === 'function');
+  const functionIds = new Set(functionNodes.map((node) => node.id));
+  if (!functionIds.has(explorer.entryNodeId)) {
+    return [];
+  }
+
+  const adjacency = new Map<string, string[]>();
+  for (const id of functionIds) {
+    adjacency.set(id, []);
+  }
+
+  const callEdges = graphData.edges.filter(
+    (edge) => edge.type === 'call' && getEdgeConfidence(edge) >= filters.minConfidence
+  );
+  for (const edge of callEdges) {
+    if (!functionIds.has(edge.source) || !functionIds.has(edge.target)) {
+      continue;
+    }
+    adjacency.get(edge.source)?.push(edge.target);
+  }
+
+  const nameById = new Map(functionNodes.map((node) => [node.id, node.name]));
+  const paths: string[][] = [];
+  const signatures = new Set<string>();
+  const maxPaths = 260;
+  const maxDepth = clamp(explorer.maxDepth, 2, 14);
+
+  const appendPath = (path: string[]): void => {
+    if (path.length === 0 || paths.length >= maxPaths) {
+      return;
+    }
+
+    const signature = path.join('>');
+    if (signatures.has(signature)) {
+      return;
+    }
+
+    signatures.add(signature);
+    paths.push(path);
+  };
+
+  const walk = (path: string[], currentId: string, visited: Set<string>): void => {
+    if (paths.length >= maxPaths) {
+      return;
+    }
+
+    const nextCandidates = prioritizeFlowCandidates(
+      (adjacency.get(currentId) ?? []).filter((candidate) => !visited.has(candidate)),
+      new Map([...adjacency.entries()].map(([id, targets]) => [id, targets.length])),
+      new Map<string, number>(),
+      nameById
+    );
+
+    if (nextCandidates.length === 0 || path.length >= maxDepth) {
+      appendPath(path);
+      return;
+    }
+
+    for (const nextId of nextCandidates) {
+      visited.add(nextId);
+      walk([...path, nextId], nextId, visited);
+      visited.delete(nextId);
+      if (paths.length >= maxPaths) {
+        break;
+      }
+    }
+  };
+
+  walk([explorer.entryNodeId], explorer.entryNodeId, new Set<string>([explorer.entryNodeId]));
+  if (paths.length === 0) {
+    appendPath([explorer.entryNodeId]);
+  }
+
+  return paths
+    .map((nodeIds, index) => {
+      const firstName = nameById.get(nodeIds[0]) ?? nodeIds[0];
+      const lastName = nameById.get(nodeIds[nodeIds.length - 1]) ?? nodeIds[nodeIds.length - 1];
+      const name =
+        nodeIds.length === 1
+          ? firstName
+          : nodeIds.length === 2
+            ? `${firstName} -> ${lastName}`
+            : `${firstName} -> ${lastName} (+${nodeIds.length - 2})`;
+
+      const edgeIds = nodeIds
+        .slice(0, -1)
+        .map((sourceId, edgeIndex) => callEdgeByPair.get(flowPairKey(sourceId, nodeIds[edgeIndex + 1])))
+        .filter((edgeId): edgeId is string => typeof edgeId === 'string');
+
+      return {
+        id: `entry-flow-${index + 1}`,
+        name,
+        nodeIds,
+        edgeIds
+      };
+    })
+    .filter((flow) => flow.nodeIds.length >= filters.minSteps)
+    .slice(0, 80);
+}
+
+function countBranchPoints(graphData: GraphData, flows: FlowDefinition[]): number {
+  if (flows.length === 0) {
+    return 0;
+  }
+
+  const functionIds = new Set(graphData.nodes.filter((node) => node.type === 'function').map((node) => node.id));
+  const outdegree = new Map<string, number>();
+  for (const id of functionIds) {
+    outdegree.set(id, 0);
+  }
+
+  for (const edge of graphData.edges) {
+    if (edge.type !== 'call' || !functionIds.has(edge.source) || !functionIds.has(edge.target)) {
+      continue;
+    }
+
+    outdegree.set(edge.source, (outdegree.get(edge.source) ?? 0) + 1);
+  }
+
+  const branchNodes = new Set<string>();
+  for (const flow of flows) {
+    for (const nodeId of flow.nodeIds) {
+      if ((outdegree.get(nodeId) ?? 0) > 1) {
+        branchNodes.add(nodeId);
+      }
+    }
+  }
+
+  return branchNodes.size;
 }
 
 function syncModuleFilterOptions(graphData: GraphData): void {
@@ -2022,6 +2333,32 @@ function parseCsvValues(raw: string): string[] {
     .filter((value) => value.length > 0);
 }
 
+function syncExplorationOptions(graphData: GraphData): void {
+  const previousEntry = callPathExplorer.entryNodeId || callPathEntry.value;
+  const previousDataFlowSource = dataFlowExplorer.sourceNodeId || dataFlowSource.value;
+
+  const functionNodes = graphData.nodes
+    .filter((node) => node.type === 'function')
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const dataFlowNodes = graphData.nodes
+    .filter((node) => node.layers.includes('dataflow'))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  applySelectOptions(
+    callPathEntry,
+    [{ value: '', label: 'Select entry function' }, ...functionNodes.map((node) => ({ value: node.id, label: node.name }))],
+    previousEntry
+  );
+  applySelectOptions(
+    dataFlowSource,
+    [{ value: '', label: 'Select source node' }, ...dataFlowNodes.map((node) => ({ value: node.id, label: `${node.name} (${node.type})` }))],
+    previousDataFlowSource
+  );
+
+  callPathExplorer.entryNodeId = callPathEntry.value;
+  dataFlowExplorer.sourceNodeId = dataFlowSource.value;
+}
+
 function applyFocusFilters(): void {
   const keepNodeIds = new Set<string>();
   const keepEdgeIds = new Set<string>();
@@ -2066,6 +2403,7 @@ function applyDependencyHighlighting(): void {
   if (!selectedNodeId) {
     latestDependencyAnalysis = undefined;
     dependencyStatus.textContent = 'Select a node to analyze dependency impact.';
+    applyDataFlowHighlighting();
     updateNodeInspector();
     return;
   }
@@ -2074,6 +2412,7 @@ function applyDependencyHighlighting(): void {
   if (selectedNode.length === 0) {
     latestDependencyAnalysis = undefined;
     dependencyStatus.textContent = 'Selected node is not visible in the current graph filters.';
+    applyDataFlowHighlighting();
     updateNodeInspector();
     return;
   }
@@ -2120,6 +2459,7 @@ function applyDependencyHighlighting(): void {
   ].join('\n');
 
   if (!focusFilters.neighborhoodOnly) {
+    applyDataFlowHighlighting();
     updateNodeInspector();
     return;
   }
@@ -2153,6 +2493,7 @@ function applyDependencyHighlighting(): void {
     }
   });
 
+  applyDataFlowHighlighting();
   updateNodeInspector();
 }
 
@@ -2235,6 +2576,126 @@ function isDependencyTraversableEdge(edge: cytoscape.EdgeSingular): boolean {
   );
 }
 
+function applyDataFlowHighlighting(): void {
+  if (!dataFlowExplorer.enabled) {
+    latestDataFlowAnalysis = undefined;
+    return;
+  }
+
+  const sourceNodeId = dataFlowExplorer.sourceNodeId;
+  if (!sourceNodeId) {
+    latestDataFlowAnalysis = undefined;
+    dataFlowStatus.textContent = 'Select a source node to trace data transformations.';
+    return;
+  }
+
+  const sourceNode = graph.getElementById(sourceNodeId);
+  if (sourceNode.length === 0) {
+    latestDataFlowAnalysis = undefined;
+    dataFlowStatus.textContent = 'Selected data-flow source is not visible in current filters.';
+    return;
+  }
+
+  const analysis = analyzeDataFlowTraversal(
+    sourceNodeId,
+    dataFlowExplorer.maxHops,
+    dataFlowExplorer.direction
+  );
+  latestDataFlowAnalysis = analysis;
+
+  for (const nodeId of analysis.nodeIds) {
+    graph.getElementById(nodeId).addClass('node-dataflow').removeClass('dimmed');
+  }
+  for (const edgeId of analysis.edgeIds) {
+    graph.getElementById(edgeId).addClass('edge-dataflow').removeClass('dimmed');
+  }
+
+  dataFlowStatus.textContent = [
+    `Source: ${nodeCatalog.get(sourceNodeId)?.name ?? sourceNodeId}`,
+    `Direction: ${dataFlowExplorer.direction}, hops <= ${dataFlowExplorer.maxHops}`,
+    `Reachable nodes: ${analysis.nodeIds.size}`,
+    `Transformations traversed: ${analysis.transformationCount}`,
+    `Forward: ${analysis.forwardCount}, Backward: ${analysis.backwardCount}`
+  ].join('\n');
+}
+
+function analyzeDataFlowTraversal(
+  sourceNodeId: string,
+  maxHops: number,
+  direction: DataFlowDirection
+): DataFlowAnalysisSnapshot {
+  const safeMaxHops = clamp(maxHops, 1, 10);
+  const nodeIds = new Set<string>([sourceNodeId]);
+  const edgeIds = new Set<string>();
+  let forwardCount = 0;
+  let backwardCount = 0;
+
+  const traverse = (mode: 'forward' | 'backward'): number => {
+    const visited = new Set<string>([sourceNodeId]);
+    const queue: Array<{ id: string; depth: number }> = [{ id: sourceNodeId, depth: 0 }];
+    let traversed = 0;
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current || current.depth >= safeMaxHops) {
+        continue;
+      }
+
+      const node = graph.getElementById(current.id);
+      if (node.length === 0) {
+        continue;
+      }
+
+      const edges = mode === 'forward' ? node.outgoers('edge') : node.incomers('edge');
+      edges.forEach((edge) => {
+        if (!isDataFlowTraversableEdge(edge)) {
+          return;
+        }
+
+        const nextNodeId = mode === 'forward' ? edge.target().id() : edge.source().id();
+        if (!nextNodeId) {
+          return;
+        }
+
+        edgeIds.add(edge.id());
+        nodeIds.add(nextNodeId);
+        traversed += 1;
+
+        if (visited.has(nextNodeId)) {
+          return;
+        }
+
+        visited.add(nextNodeId);
+        queue.push({ id: nextNodeId, depth: current.depth + 1 });
+      });
+    }
+
+    return traversed;
+  };
+
+  if (direction === 'forward' || direction === 'both') {
+    forwardCount = traverse('forward');
+  }
+
+  if (direction === 'backward' || direction === 'both') {
+    backwardCount = traverse('backward');
+  }
+
+  return {
+    sourceNodeId,
+    nodeIds,
+    edgeIds,
+    forwardCount,
+    backwardCount,
+    transformationCount: edgeIds.size
+  };
+}
+
+function isDataFlowTraversableEdge(edge: cytoscape.EdgeSingular): boolean {
+  const edgeType = String(edge.data('type'));
+  return edgeType === 'dataflow' || edgeType === 'call';
+}
+
 function openNodeSource(nodeId: string): void {
   const node = nodeCatalog.get(nodeId);
   if (!node || !node.filePath || typeof node.line !== 'number') {
@@ -2276,6 +2737,11 @@ function updateNodeInspector(): void {
     lines.push(`Transitive upstream: ${latestDependencyAnalysis.upstreamNodeIds.size}`);
     lines.push(`Transitive downstream: ${latestDependencyAnalysis.downstreamNodeIds.size}`);
     lines.push(`Blast radius: ${latestDependencyAnalysis.blastRadiusNodeCount}`);
+  }
+
+  if (latestDataFlowAnalysis && latestDataFlowAnalysis.nodeIds.has(selectedNodeId)) {
+    lines.push(`Data-flow reach: yes`);
+    lines.push(`Data transformations: ${latestDataFlowAnalysis.transformationCount}`);
   }
 
   const moduleNodeId = getModuleNodeId(node);
