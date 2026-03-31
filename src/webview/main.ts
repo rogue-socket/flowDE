@@ -65,7 +65,29 @@ interface GraphData {
 
 type IncomingMessage =
   | { type: 'graphData'; payload: GraphData }
-  | { type: 'graphError'; message: string };
+  | { type: 'graphError'; message: string }
+  | { type: 'executionReset'; entryFilePath: string }
+  | { type: 'executionEvent'; payload: ExecutionTraceEvent }
+  | { type: 'executionComplete'; summary: { totalEvents: number; exitCode?: number; stopped?: boolean } }
+  | { type: 'executionError'; message: string };
+
+type ExecutionEventType = 'call' | 'line' | 'return' | 'exception';
+
+interface ExecutionTraceEvent {
+  index: number;
+  eventType: ExecutionEventType;
+  timestamp: number;
+  filePath: string;
+  line: number;
+  definitionLine?: number;
+  functionName: string;
+  qualifiedName?: string;
+  nodeId?: string;
+  inputs?: Record<string, unknown>;
+  locals?: Record<string, unknown>;
+  output?: unknown;
+  exception?: string;
+}
 
 type LayoutMode = 'clustered' | 'force';
 
@@ -128,6 +150,13 @@ const layerExecutionToggle = getRequiredElement<HTMLInputElement>('#layer-execut
 const collapseFunctionsToggle = getRequiredElement<HTMLInputElement>('#collapse-functions');
 const collapseLibrariesToggle = getRequiredElement<HTMLInputElement>('#collapse-libraries');
 const reductionHint = getRequiredElement<HTMLElement>('#reduction-hint');
+const executionStartButton = getRequiredElement<HTMLButtonElement>('#execution-start-btn');
+const executionStopButton = getRequiredElement<HTMLButtonElement>('#execution-stop-btn');
+const executionPrevButton = getRequiredElement<HTMLButtonElement>('#execution-prev-btn');
+const executionPlayButton = getRequiredElement<HTMLButtonElement>('#execution-play-btn');
+const executionNextButton = getRequiredElement<HTMLButtonElement>('#execution-next-btn');
+const executionStatus = getRequiredElement<HTMLElement>('#execution-status');
+const executionNodeState = getRequiredElement<HTMLElement>('#execution-node-state');
 const nodeInspector = getRequiredElement<HTMLElement>('#node-inspector');
 const openSourceButton = getRequiredElement<HTMLButtonElement>('#open-source-btn');
 const flowMinLength = getRequiredElement<HTMLSelectElement>('#flow-min-length');
@@ -159,8 +188,16 @@ let selectedStepIndex: number | undefined;
 let selectedNodeId: string | undefined;
 let playbackTimer: number | undefined;
 let isPlaybackRunning = false;
+let executionPlaybackTimer: number | undefined;
+let isExecutionPlaybackRunning = false;
+let executionTraceRunning = false;
+let executionCursor = -1;
+const executionEvents: ExecutionTraceEvent[] = [];
+const dynamicExecutionEdgeIds = new Set<string>();
+const latestExecutionEventByNodeId = new Map<string, ExecutionTraceEvent>();
 const nodeCatalog = new Map<string, GraphNode>();
 const callEdgeByPair = new Map<string, string>();
+const anyEdgeByPair = new Map<string, string>();
 const edgeCatalog = new Map<string, GraphEdge>();
 
 const flowFilters: FlowFilters = {
@@ -282,6 +319,24 @@ const graph = cytoscape({
       }
     },
     {
+      selector: 'node.execution-visited',
+      style: {
+        'border-width': 2,
+        'border-color': '#f94144',
+        opacity: 1,
+        'text-opacity': 1
+      }
+    },
+    {
+      selector: 'node.execution-active',
+      style: {
+        'border-width': 4,
+        'border-color': '#ff9f1c',
+        'overlay-color': '#ff9f1c',
+        'overlay-opacity': 0.12
+      }
+    },
+    {
       selector: 'node[type = "function"]',
       style: {
         shape: 'roundrectangle',
@@ -375,6 +430,15 @@ const graph = cytoscape({
       }
     },
     {
+      selector: 'edge.execution-traversed',
+      style: {
+        width: 3.1,
+        opacity: 1,
+        'line-color': '#f94144',
+        'target-arrow-color': '#f94144'
+      }
+    },
+    {
       selector: 'edge[type = "call"]',
       style: {
         'line-color': '#f4a261',
@@ -440,9 +504,10 @@ graph.on('tap', 'node', (event: cytoscape.EventObject) => {
     if (stepIndex >= 0) {
       selectedStepIndex = stepIndex;
       renderFlowSteps(activeFlow);
-      applyFlowHighlighting();
     }
   }
+
+  applyFlowHighlighting();
 });
 
 graph.on('dbltap', 'node', (event: cytoscape.EventObject) => {
@@ -612,6 +677,36 @@ layerExecutionToggle.addEventListener('change', () => {
   rerenderGraphFromSource();
 });
 
+executionStartButton.addEventListener('click', () => {
+  if (executionTraceRunning) {
+    return;
+  }
+
+  executionStatus.textContent = 'Starting runtime trace...';
+  vscode.postMessage({ type: 'startExecutionTrace' });
+});
+
+executionStopButton.addEventListener('click', () => {
+  vscode.postMessage({ type: 'stopExecutionTrace' });
+});
+
+executionPrevButton.addEventListener('click', () => {
+  stepExecution(-1);
+});
+
+executionNextButton.addEventListener('click', () => {
+  stepExecution(1);
+});
+
+executionPlayButton.addEventListener('click', () => {
+  if (isExecutionPlaybackRunning) {
+    stopExecutionPlayback();
+    return;
+  }
+
+  startExecutionPlayback();
+});
+
 collapseFunctionsToggle.addEventListener('change', () => {
   reductionState.collapseInternalFunctions = collapseFunctionsToggle.checked;
   if (!reductionState.collapseInternalFunctions) {
@@ -707,6 +802,29 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
   if (message.type === 'graphData') {
     renderGraph(message.payload);
     refreshButton.disabled = false;
+    return;
+  }
+
+  if (message.type === 'executionReset') {
+    resetExecutionTrace(message.entryFilePath);
+    return;
+  }
+
+  if (message.type === 'executionEvent') {
+    ingestExecutionEvent(message.payload);
+    return;
+  }
+
+  if (message.type === 'executionComplete') {
+    completeExecutionTrace(message.summary);
+    return;
+  }
+
+  if (message.type === 'executionError') {
+    executionStatus.textContent = `Trace error: ${message.message}`;
+    executionTraceRunning = false;
+    stopExecutionPlayback();
+    updateExecutionControls();
   }
 });
 
@@ -720,6 +838,7 @@ collapseFunctionsToggle.checked = reductionState.collapseInternalFunctions;
 collapseLibrariesToggle.checked = reductionState.collapseLibraries;
 updateReductionHint();
 flowConfidenceValue.textContent = `${Math.round(flowFilters.minConfidence * 100)}%`;
+updateExecutionControls();
 scheduleMinimapRender();
 vscode.postMessage({ type: 'ready' });
 
@@ -730,6 +849,7 @@ function renderGraph(graphData: GraphData): void {
 
   nodeCatalog.clear();
   callEdgeByPair.clear();
+  anyEdgeByPair.clear();
   edgeCatalog.clear();
 
   for (const node of displayedGraphData.nodes) {
@@ -738,12 +858,16 @@ function renderGraph(graphData: GraphData): void {
 
   for (const edge of displayedGraphData.edges) {
     edgeCatalog.set(edge.id, edge);
+    const pairKey = flowPairKey(edge.source, edge.target);
+    if (!anyEdgeByPair.has(pairKey)) {
+      anyEdgeByPair.set(pairKey, edge.id);
+    }
 
     if (edge.type !== 'call') {
       continue;
     }
 
-    callEdgeByPair.set(flowPairKey(edge.source, edge.target), edge.id);
+    callEdgeByPair.set(pairKey, edge.id);
   }
 
   if (selectedNodeId && !nodeCatalog.has(selectedNodeId)) {
@@ -787,6 +911,7 @@ function renderGraph(graphData: GraphData): void {
   }
 
   applyFlowHighlighting();
+  applyExecutionOverlay(false);
 
   const diagnostics = graphData.meta.diagnostics;
   const totalCalls = diagnostics.resolvedCalls + diagnostics.unresolvedCalls;
@@ -890,7 +1015,7 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
 
 function applyFlowHighlighting(): void {
   graph.elements().removeClass(
-    'dimmed flow-node flow-edge flow-current flow-current-edge node-selected node-incoming node-outgoing edge-incoming edge-outgoing'
+    'dimmed flow-node flow-edge flow-current flow-current-edge node-selected node-incoming node-outgoing edge-incoming edge-outgoing execution-visited execution-active execution-traversed'
   );
 
   const activeFlow = getSelectedFlow();
@@ -898,6 +1023,7 @@ function applyFlowHighlighting(): void {
     applyFocusFilters();
     renderExplainPanel(undefined);
     updatePlaybackControls();
+    applyExecutionOverlay(false);
     scheduleMinimapRender();
     return;
   }
@@ -943,6 +1069,7 @@ function applyFlowHighlighting(): void {
 
   renderExplainPanel(activeFlow);
   updatePlaybackControls();
+  applyExecutionOverlay(false);
   scheduleMinimapRender();
 }
 
@@ -1597,6 +1724,23 @@ function updateNodeInspector(): void {
     lines.push(`Location: ${node.filePath}:${node.line}`);
   }
 
+  const runtimeEvent = latestExecutionEventByNodeId.get(node.id);
+  if (runtimeEvent) {
+    lines.push(`Runtime: ${runtimeEvent.eventType} @ step ${runtimeEvent.index + 1}`);
+
+    if (runtimeEvent.inputs && Object.keys(runtimeEvent.inputs).length > 0) {
+      lines.push(`Inputs: ${formatRuntimeObject(runtimeEvent.inputs)}`);
+    }
+
+    if (runtimeEvent.locals && Object.keys(runtimeEvent.locals).length > 0) {
+      lines.push(`Intermediate: ${formatRuntimeObject(runtimeEvent.locals)}`);
+    }
+
+    if (runtimeEvent.eventType === 'return') {
+      lines.push(`Output: ${formatRuntimeValue(runtimeEvent.output)}`);
+    }
+  }
+
   nodeInspector.textContent = lines.join('\n');
   openSourceButton.disabled = !(node.filePath && typeof node.line === 'number');
 }
@@ -1660,6 +1804,248 @@ function updatePlaybackControls(): void {
   flowPrevButton.disabled = !hasFlow || currentIndex <= 0;
   flowNextButton.disabled = !hasFlow || !flow || currentIndex >= flow.nodeIds.length - 1;
   flowPlayButton.disabled = !hasFlow;
+}
+
+function resetExecutionTrace(entryFilePath: string): void {
+  stopExecutionPlayback();
+  executionEvents.splice(0, executionEvents.length);
+  executionCursor = -1;
+  latestExecutionEventByNodeId.clear();
+  clearDynamicExecutionEdges();
+
+  executionTraceRunning = true;
+  layerVisibility.execution = true;
+  layerExecutionToggle.checked = true;
+
+  executionStatus.textContent = `Tracing ${entryFilePath}...`;
+  executionNodeState.textContent = 'Waiting for runtime events...';
+  updateExecutionControls();
+  rerenderGraphFromSource();
+}
+
+function ingestExecutionEvent(traceEvent: ExecutionTraceEvent): void {
+  executionEvents.push(traceEvent);
+  executionCursor = executionEvents.length - 1;
+
+  if (traceEvent.nodeId) {
+    latestExecutionEventByNodeId.set(traceEvent.nodeId, traceEvent);
+  }
+
+  executionStatus.textContent = `Tracing... ${executionEvents.length} event${executionEvents.length === 1 ? '' : 's'}`;
+  applyExecutionOverlay(true);
+  updateExecutionControls();
+}
+
+function completeExecutionTrace(summary: { totalEvents: number; exitCode?: number; stopped?: boolean }): void {
+  executionTraceRunning = false;
+  stopExecutionPlayback();
+
+  const parts: string[] = [];
+  if (summary.stopped) {
+    parts.push('stopped');
+  } else {
+    parts.push('complete');
+  }
+  parts.push(`${summary.totalEvents} events`);
+  if (typeof summary.exitCode === 'number') {
+    parts.push(`exit ${summary.exitCode}`);
+  }
+
+  executionStatus.textContent = `Trace ${parts.join(' | ')}`;
+  updateExecutionControls();
+  applyExecutionOverlay(false);
+}
+
+function startExecutionPlayback(): void {
+  if (executionEvents.length === 0) {
+    return;
+  }
+
+  if (executionCursor < 0) {
+    executionCursor = 0;
+  }
+
+  isExecutionPlaybackRunning = true;
+  executionPlayButton.textContent = 'Pause';
+  updateExecutionControls();
+
+  executionPlaybackTimer = window.setInterval(() => {
+    const advanced = stepExecution(1, true);
+    if (!advanced) {
+      stopExecutionPlayback();
+    }
+  }, 520);
+}
+
+function stopExecutionPlayback(): void {
+  if (executionPlaybackTimer) {
+    clearInterval(executionPlaybackTimer);
+    executionPlaybackTimer = undefined;
+  }
+
+  isExecutionPlaybackRunning = false;
+  executionPlayButton.textContent = 'Play';
+  updateExecutionControls();
+}
+
+function stepExecution(delta: number, autoFocus = true): boolean {
+  if (executionEvents.length === 0) {
+    return false;
+  }
+
+  const current = executionCursor < 0 ? 0 : executionCursor;
+  const next = Math.min(executionEvents.length - 1, Math.max(0, current + delta));
+  if (next === executionCursor) {
+    return false;
+  }
+
+  executionCursor = next;
+  applyExecutionOverlay(autoFocus);
+  updateExecutionControls();
+  return true;
+}
+
+function updateExecutionControls(): void {
+  const hasEvents = executionEvents.length > 0;
+  const hasCursor = executionCursor >= 0;
+
+  executionStartButton.disabled = executionTraceRunning;
+  executionStopButton.disabled = !executionTraceRunning;
+  executionPrevButton.disabled = !hasEvents || !hasCursor || executionCursor <= 0;
+  executionNextButton.disabled = !hasEvents || !hasCursor || executionCursor >= executionEvents.length - 1;
+  executionPlayButton.disabled = !hasEvents;
+  executionPlayButton.textContent = isExecutionPlaybackRunning ? 'Pause' : 'Play';
+}
+
+function clearDynamicExecutionEdges(): void {
+  if (dynamicExecutionEdgeIds.size === 0) {
+    return;
+  }
+
+  for (const edgeId of dynamicExecutionEdgeIds) {
+    graph.getElementById(edgeId).remove();
+  }
+
+  dynamicExecutionEdgeIds.clear();
+}
+
+function applyExecutionOverlay(autoFocus: boolean): void {
+  graph.nodes().removeClass('execution-visited execution-active');
+  graph.edges().removeClass('execution-traversed');
+  clearDynamicExecutionEdges();
+
+  if (!layerVisibility.execution || executionEvents.length === 0 || executionCursor < 0) {
+    updateExecutionNodeState(undefined);
+    updateNodeInspector();
+    return;
+  }
+
+  const terminalIndex = Math.min(executionCursor, executionEvents.length - 1);
+  const visitedNodeIds = new Set<string>();
+
+  for (let index = 0; index <= terminalIndex; index += 1) {
+    const traceEvent = executionEvents[index];
+    if (traceEvent?.nodeId && graph.getElementById(traceEvent.nodeId).length > 0) {
+      visitedNodeIds.add(traceEvent.nodeId);
+    }
+  }
+
+  for (const nodeId of visitedNodeIds) {
+    graph.getElementById(nodeId).addClass('execution-visited').removeClass('dimmed');
+  }
+
+  for (let index = 1; index <= terminalIndex; index += 1) {
+    const previous = executionEvents[index - 1];
+    const current = executionEvents[index];
+    if (!previous?.nodeId || !current?.nodeId || previous.nodeId === current.nodeId) {
+      continue;
+    }
+
+    const pairKey = flowPairKey(previous.nodeId, current.nodeId);
+    const existingEdgeId = anyEdgeByPair.get(pairKey);
+    if (existingEdgeId) {
+      graph.getElementById(existingEdgeId).addClass('execution-traversed').removeClass('dimmed');
+      continue;
+    }
+
+    const dynamicEdgeId = `edge:execution:path:${index}:${previous.nodeId}->${current.nodeId}`;
+    if (graph.getElementById(dynamicEdgeId).length === 0) {
+      graph.add({
+        data: {
+          id: dynamicEdgeId,
+          source: previous.nodeId,
+          target: current.nodeId,
+          type: 'execution-path'
+        }
+      });
+      dynamicExecutionEdgeIds.add(dynamicEdgeId);
+    }
+
+    graph.getElementById(dynamicEdgeId).addClass('execution-traversed').removeClass('dimmed');
+  }
+
+  const activeEvent = executionEvents[terminalIndex];
+  if (activeEvent?.nodeId && graph.getElementById(activeEvent.nodeId).length > 0) {
+    const activeNode = graph.getElementById(activeEvent.nodeId);
+    activeNode.addClass('execution-active').removeClass('dimmed');
+    if (autoFocus) {
+      focusNode(activeEvent.nodeId, true);
+    }
+  }
+
+  updateExecutionNodeState(activeEvent);
+  updateNodeInspector();
+  scheduleMinimapRender();
+}
+
+function updateExecutionNodeState(event: ExecutionTraceEvent | undefined): void {
+  if (!event) {
+    executionNodeState.textContent = executionEvents.length === 0
+      ? 'Run a trace to inspect inputs, outputs, and intermediate values.'
+      : 'Select an execution step to inspect runtime state.';
+    return;
+  }
+
+  const lines: string[] = [];
+  lines.push(`Step: ${event.index + 1}/${executionEvents.length}`);
+  lines.push(`Event: ${event.eventType}`);
+  lines.push(`Location: ${event.filePath}:${event.line}`);
+  lines.push(`Function: ${event.qualifiedName ?? event.functionName}`);
+
+  if (event.inputs && Object.keys(event.inputs).length > 0) {
+    lines.push(`Inputs: ${formatRuntimeObject(event.inputs)}`);
+  }
+
+  if (event.locals && Object.keys(event.locals).length > 0) {
+    lines.push(`Intermediate: ${formatRuntimeObject(event.locals)}`);
+  }
+
+  if (event.eventType === 'return') {
+    lines.push(`Output: ${formatRuntimeValue(event.output)}`);
+  }
+
+  if (event.eventType === 'exception' && event.exception) {
+    lines.push(`Exception: ${event.exception}`);
+  }
+
+  executionNodeState.textContent = lines.join('\n');
+}
+
+function formatRuntimeObject(value: Record<string, unknown>): string {
+  return formatRuntimeValue(value);
+}
+
+function formatRuntimeValue(value: unknown): string {
+  try {
+    const json = JSON.stringify(value);
+    if (!json) {
+      return String(value);
+    }
+
+    return json.length > 260 ? `${json.slice(0, 257)}...` : json;
+  } catch {
+    return String(value);
+  }
 }
 
 function renderExplainPanel(flow: FlowDefinition | undefined): void {

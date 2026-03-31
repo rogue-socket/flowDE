@@ -117,7 +117,8 @@ body {
 .focus-panel,
 .node-inspector-panel,
 .reduction-panel,
-.layer-panel {
+.layer-panel,
+.execution-panel {
   display: grid;
   gap: 7px;
   border: 1px solid var(--panel-border);
@@ -129,7 +130,8 @@ body {
 .focus-panel h3,
 .node-inspector-panel h3,
 .reduction-panel h3,
-.layer-panel h3 {
+.layer-panel h3,
+.execution-panel h3 {
   margin: 0;
   font-size: 11px;
   color: var(--muted-fg);
@@ -196,6 +198,54 @@ body {
   min-height: 56px;
   padding: 8px;
   white-space: pre-wrap;
+}
+
+.execution-actions,
+.execution-playback {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.execution-actions button,
+.execution-playback button {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--button-bg);
+  color: var(--panel-fg);
+  font-size: 10px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.execution-actions button:hover,
+.execution-playback button:hover {
+  background: var(--button-hover);
+}
+
+.execution-actions button:disabled,
+.execution-playback button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.execution-status,
+.execution-node-state {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-bg) 88%, black 5%);
+  color: var(--muted-fg);
+  font-size: 10px;
+  line-height: 1.45;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
+.execution-status {
+  min-height: 18px;
+}
+
+.execution-node-state {
+  min-height: 64px;
 }
 
 .flow-controls {
@@ -508,6 +558,11 @@ body {
 
 .legend-edge.dataflow {
   border-top-color: #90be6d;
+}
+
+.legend-edge.execution {
+  border-top-color: #f94144;
+  border-top-style: dashed;
 }
 
 @media (max-width: 900px) {

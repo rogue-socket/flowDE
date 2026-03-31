@@ -22,6 +22,9 @@ And it keeps the text-first workflow intact by letting you click a node and jump
 - Node click navigation to code (file + line)
 - Live refresh support (manual and on Python file changes)
 - Smart reduction + expand-on-demand for dense graphs
+- Runtime trace instrumentation with live graph highlighting
+- Step-through execution replay controls
+- Node runtime state inspection (inputs, outputs, intermediate locals)
 
 ## Architecture
 
@@ -57,7 +60,7 @@ Graph layers:
 - Structural layer: containment and declaration topology
 - Dependency layer: calls, imports, class usage
 - Data flow layer: variable movement and transformation paths
-- Execution layer: reserved contract for runtime traces and path replay
+- Execution layer: runtime trace events, traversal replay, and dynamic execution paths
 
 Graph schema: `src/graph/schema.ts`
 
@@ -66,6 +69,12 @@ Core model guarantees:
 - Nodes can have multiple roles (`container`, `callable`, `type`, `state`, `transform`, `external`)
 - Every edge has an explicit layer and type
 - Graph metadata reports per-layer stats and resolution diagnostics
+
+Execution mapping strategy:
+
+- Python runtime tracer emits structured events (call/line/return/exception)
+- Extension maps runtime events to static graph nodes by workspace-relative file + symbol + line heuristics
+- Webview stores traces for replay and overlays execution traversal on the graph in time order
 
 ### 3. Webview Frontend
 
