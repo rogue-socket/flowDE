@@ -478,7 +478,18 @@ body {
   width: 100%;
 }
 
+#layout-spacing {
+  width: 100%;
+}
+
 #dependency-hops-value {
+  font-size: 10px;
+  color: var(--muted-fg);
+  min-width: 20px;
+  text-align: right;
+}
+
+#layout-spacing-value {
   font-size: 10px;
   color: var(--muted-fg);
   min-width: 20px;

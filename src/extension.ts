@@ -1231,6 +1231,20 @@ class FlowDEPanel implements vscode.Disposable {
                 <span id="dependency-hops-value">3</span>
               </div>
             </label>
+            <label class="focus-control">
+              <span>Unrelated nodes</span>
+              <select id="focus-visibility">
+                <option value="dim" selected>Dim them</option>
+                <option value="hide">Hide them</option>
+              </select>
+            </label>
+            <label class="focus-control">
+              <span>Layout spacing</span>
+              <div class="focus-slider-row">
+                <input id="layout-spacing" type="range" min="1" max="5" step="1" value="3" />
+                <span id="layout-spacing-value">3</span>
+              </div>
+            </label>
             <p id="dependency-status" class="dependency-status">Select a node to analyze dependency impact.</p>
             <button id="focus-clear-btn" type="button">Clear focus</button>
           </div>

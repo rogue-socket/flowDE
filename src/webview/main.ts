@@ -115,6 +115,13 @@ interface FocusFilters {
   neighborhoodOnly: boolean;
 }
 
+type FocusVisibilityMode = 'dim' | 'hide';
+
+interface DeclutterState {
+  visibilityMode: FocusVisibilityMode;
+  layoutSpacing: number;
+}
+
 type DependencyDirection = 'upstream' | 'downstream' | 'both';
 
 interface DependencyTraversalState {
@@ -204,6 +211,9 @@ const focusNeighborhood = getRequiredElement<HTMLInputElement>('#focus-neighborh
 const dependencyDirection = getRequiredElement<HTMLSelectElement>('#dependency-direction');
 const dependencyHops = getRequiredElement<HTMLInputElement>('#dependency-hops');
 const dependencyHopsValue = getRequiredElement<HTMLElement>('#dependency-hops-value');
+const focusVisibilitySelect = getRequiredElement<HTMLSelectElement>('#focus-visibility');
+const layoutSpacing = getRequiredElement<HTMLInputElement>('#layout-spacing');
+const layoutSpacingValue = getRequiredElement<HTMLElement>('#layout-spacing-value');
 const dependencyStatus = getRequiredElement<HTMLElement>('#dependency-status');
 const callPathEntry = getRequiredElement<HTMLSelectElement>('#callpath-entry');
 const callPathDepth = getRequiredElement<HTMLInputElement>('#callpath-depth');
@@ -338,6 +348,11 @@ const focusFilters: FocusFilters = {
   neighborhoodOnly: false
 };
 
+const declutterState: DeclutterState = {
+  visibilityMode: (focusVisibilitySelect.value as FocusVisibilityMode) || 'dim',
+  layoutSpacing: Number.parseInt(layoutSpacing.value, 10) || 3
+};
+
 const dependencyTraversal: DependencyTraversalState = {
   direction: (dependencyDirection.value as DependencyDirection) || 'both',
   maxHops: Number.parseInt(dependencyHops.value, 10) || 3
@@ -427,6 +442,12 @@ const graph = cytoscape({
       style: {
         opacity: 0.16,
         'text-opacity': 0.2
+      }
+    },
+    {
+      selector: 'node.hidden-by-scope',
+      style: {
+        display: 'none'
       }
     },
     {
@@ -571,6 +592,12 @@ const graph = cytoscape({
       selector: 'edge.dimmed',
       style: {
         opacity: 0.06
+      }
+    },
+    {
+      selector: 'edge.hidden-by-scope',
+      style: {
+        display: 'none'
       }
     },
     {
@@ -958,6 +985,21 @@ dependencyHops.addEventListener('input', () => {
   dependencyTraversal.maxHops = Number.isFinite(value) ? clamp(value, 1, 8) : 3;
   dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
   applyFlowHighlighting();
+});
+
+focusVisibilitySelect.addEventListener('change', () => {
+  const mode = focusVisibilitySelect.value;
+  if (mode === 'dim' || mode === 'hide') {
+    declutterState.visibilityMode = mode;
+  }
+  applyFlowHighlighting();
+});
+
+layoutSpacing.addEventListener('input', () => {
+  const value = Number.parseInt(layoutSpacing.value, 10);
+  declutterState.layoutSpacing = Number.isFinite(value) ? clamp(value, 1, 5) : 3;
+  layoutSpacingValue.textContent = String(declutterState.layoutSpacing);
+  rerenderGraphFromSource();
 });
 
 callPathEntry.addEventListener('change', () => {
@@ -1386,6 +1428,9 @@ focusNeighborhood.checked = focusFilters.neighborhoodOnly;
 dependencyDirection.value = dependencyTraversal.direction;
 dependencyHops.value = String(dependencyTraversal.maxHops);
 dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
+focusVisibilitySelect.value = declutterState.visibilityMode;
+layoutSpacing.value = String(declutterState.layoutSpacing);
+layoutSpacingValue.textContent = String(declutterState.layoutSpacing);
 abstractionLevelSelect.value = graphAbstraction.manualLevel;
 abstractionAutoToggle.checked = graphAbstraction.autoByZoom;
 journeyModeSelect.value = journeyState.mode;
@@ -1588,7 +1633,7 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
 
 function applyFlowHighlighting(): void {
   graph.elements().removeClass(
-    'dimmed flow-node flow-edge flow-current flow-current-edge node-selected node-incoming node-outgoing node-impact node-dataflow edge-incoming edge-outgoing edge-impact edge-dataflow execution-visited execution-active execution-traversed'
+    'dimmed hidden-by-scope flow-node flow-edge flow-current flow-current-edge node-selected node-incoming node-outgoing node-impact node-dataflow edge-incoming edge-outgoing edge-impact edge-dataflow execution-visited execution-active execution-traversed'
   );
 
   const activeFlow = getSelectedFlow();
@@ -2284,9 +2329,11 @@ function applyJourneyHighlighting(): void {
   const activeNodeIds = new Set(journeyState.nodeIds);
   const activeEdgeIds = new Set(journeyState.edgeIds);
 
+  const maskClass = declutterState.visibilityMode === 'hide' ? 'hidden-by-scope' : 'dimmed';
+
   graph.nodes().forEach((node) => {
     if (!activeNodeIds.has(node.id())) {
-      node.addClass('dimmed');
+      node.addClass(maskClass);
       return;
     }
 
@@ -2295,7 +2342,7 @@ function applyJourneyHighlighting(): void {
 
   graph.edges().forEach((edge) => {
     if (!activeEdgeIds.has(edge.id())) {
-      edge.addClass('dimmed');
+      edge.addClass(maskClass);
       return;
     }
 
@@ -2325,6 +2372,9 @@ function setGuidedMode(enabled: boolean, rerender: boolean): void {
   }
 
   if (enabled) {
+    declutterState.visibilityMode = 'hide';
+    focusVisibilitySelect.value = 'hide';
+
     if (graphAbstraction.autoByZoom) {
       graphAbstraction.autoByZoom = false;
       abstractionAutoToggle.checked = false;
@@ -2348,6 +2398,9 @@ function setGuidedMode(enabled: boolean, rerender: boolean): void {
 
     updateNavigationStatus('Guided mode: core controls only, stable zoom, advanced tools minimized.');
   } else {
+    declutterState.visibilityMode = 'dim';
+    focusVisibilitySelect.value = 'dim';
+
     if (rerender) {
       rerenderGraphFromSource();
     }
@@ -3281,20 +3334,27 @@ function applyFocusFilters(): void {
       }
     });
 
-    graph.nodes().forEach((node) => {
-      if (!keepNodeIds.has(node.id())) {
-        node.addClass('dimmed');
-      }
-    });
-
-    graph.edges().forEach((edge) => {
-      if (!keepEdgeIds.has(edge.id())) {
-        edge.addClass('dimmed');
-      }
-    });
+    applyScopeMasking(keepNodeIds, keepEdgeIds);
   }
 
   applyDependencyHighlighting();
+}
+
+function applyScopeMasking(keepNodeIds: Set<string>, keepEdgeIds: Set<string>): void {
+  const hide = declutterState.visibilityMode === 'hide';
+  const maskClass = hide ? 'hidden-by-scope' : 'dimmed';
+
+  graph.nodes().forEach((node) => {
+    if (!keepNodeIds.has(node.id())) {
+      node.addClass(maskClass);
+    }
+  });
+
+  graph.edges().forEach((edge) => {
+    if (!keepEdgeIds.has(edge.id())) {
+      edge.addClass(maskClass);
+    }
+  });
 }
 
 function applyDependencyHighlighting(): void {
@@ -3394,17 +3454,7 @@ function applyDependencyHighlighting(): void {
     ...analysis.downstreamEdgeIds
   ]);
 
-  graph.nodes().forEach((node) => {
-    if (!neighborhoodNodeIds.has(node.id())) {
-      node.addClass('dimmed');
-    }
-  });
-
-  graph.edges().forEach((edge) => {
-    if (!neighborhoodEdgeIds.has(edge.id())) {
-      edge.addClass('dimmed');
-    }
-  });
+  applyScopeMasking(neighborhoodNodeIds, neighborhoodEdgeIds);
 
   applyDataFlowHighlighting();
   updateNodeInspector();
@@ -4060,13 +4110,15 @@ function applyLayout(graphData: GraphData, shouldFit: boolean): void {
     return;
   }
 
+  const spacingFactor = 0.8 + declutterState.layoutSpacing * 0.25;
+
   runLayout({
     name: 'cose',
     animate: false,
-    nodeRepulsion: 240000,
-    idealEdgeLength: 100,
+    nodeRepulsion: Math.round(240000 * Math.pow(spacingFactor, 1.35)),
+    idealEdgeLength: Math.round(100 * spacingFactor),
     fit: shouldFit,
-    padding: 40
+    padding: Math.round(40 * spacingFactor)
   });
 }
 
@@ -4170,8 +4222,9 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
     modulesByLayer.set(layer, bucket);
   }
 
-  const horizontalSpacing = 460;
-  const verticalSpacing = 300;
+  const spacingFactor = 0.8 + declutterState.layoutSpacing * 0.25;
+  const horizontalSpacing = 460 * spacingFactor;
+  const verticalSpacing = 300 * spacingFactor;
   const layerKeys = [...modulesByLayer.keys()].sort((a, b) => a - b);
 
   for (const layer of layerKeys) {
@@ -4237,7 +4290,7 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
     sortedClasses.forEach((classNode, index) => {
       const items = Math.max(sortedClasses.length, 1);
       const angle = (2 * Math.PI * index) / items - Math.PI / 2;
-      const radius = 96;
+      const radius = 96 * spacingFactor;
 
       positions.set(classNode.id, {
         x: center.x + radius * Math.cos(angle),
@@ -4256,7 +4309,7 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
       const indexInRing = index % perRing;
       const itemsInRing = Math.min(perRing, sortedFunctions.length - ring * perRing);
       const angle = (2 * Math.PI * indexInRing) / Math.max(itemsInRing, 1) - Math.PI / 2;
-      const radius = 130 + ring * 72;
+      const radius = (130 + ring * 72) * spacingFactor;
 
       positions.set(functionNode.id, {
         x: center.x + radius * Math.cos(angle),
@@ -4265,13 +4318,14 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
     });
   }
 
-  const orphanBaseY = -((unscopedFunctions.length - 1) * 95) / 2;
+  const orphanSpacing = 95 * spacingFactor;
+  const orphanBaseY = -((unscopedFunctions.length - 1) * orphanSpacing) / 2;
   unscopedFunctions
     .sort((a, b) => a.name.localeCompare(b.name))
     .forEach((functionNode, index) => {
       positions.set(functionNode.id, {
         x: -horizontalSpacing,
-        y: orphanBaseY + index * 95
+        y: orphanBaseY + index * orphanSpacing
       });
     });
 
@@ -4300,7 +4354,7 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
     const ring = Math.floor(index / perRing);
     const indexInRing = index % perRing;
     const angle = (2 * Math.PI * indexInRing) / perRing - Math.PI / 2;
-    const radius = 44 + ring * 24;
+    const radius = (44 + ring * 24) * spacingFactor;
 
     positions.set(variableNode.id, {
       x: anchor.x + radius * Math.cos(angle),
