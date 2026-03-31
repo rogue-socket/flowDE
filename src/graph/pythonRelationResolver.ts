@@ -9,8 +9,14 @@ import {
   ResolutionResult
 } from './semanticTypes';
 
+/**
+ * Internal provenance type used during call-target inference.
+ */
 type ResolutionProvenance = 'containment' | 'ast' | 'import-map' | 'heuristic';
 
+/**
+ * Result payload for resolving a single call reference.
+ */
 interface CallResolution {
   targetFunctionId?: string;
   confidence: number;
@@ -19,7 +25,13 @@ interface CallResolution {
   ambiguous: boolean;
 }
 
+/**
+ * Converts indexed symbols and references into graph nodes and typed edges.
+ */
 export class PythonRelationResolver {
+  /**
+   * Resolves all graph relationships for a workspace indexing result.
+   */
   public resolve(modules: IndexedModule[]): ResolutionResult {
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
@@ -74,6 +86,8 @@ export class PythonRelationResolver {
         }
       }))
     );
+
+    const nodeIds = new Set(nodes.map((node) => node.id));
 
     nodes.push(
       ...functionSymbols.map((symbol) => ({
@@ -236,7 +250,7 @@ export class PythonRelationResolver {
     }
 
     for (const ref of dataFlowRefs) {
-      if (!this.nodeExists(nodes, ref.sourceNodeId) || !this.nodeExists(nodes, ref.targetNodeId)) {
+      if (!nodeIds.has(ref.sourceNodeId) || !nodeIds.has(ref.targetNodeId)) {
         continue;
       }
 
@@ -309,6 +323,9 @@ export class PythonRelationResolver {
     };
   }
 
+  /**
+   * Adds an edge only if it has not already been added to the result set.
+   */
   private addEdge(edges: GraphEdge[], edgeIds: Set<string>, edge: GraphEdge): void {
     if (edgeIds.has(edge.id)) {
       return;
@@ -318,10 +335,9 @@ export class PythonRelationResolver {
     edges.push(edge);
   }
 
-  private nodeExists(nodes: GraphNode[], nodeId: string): boolean {
-    return nodes.some((node) => node.id === nodeId);
-  }
-
+  /**
+   * Detects class-like call usage edges when call expressions reference a class name.
+   */
   private resolveClassUsageTarget(
     callRef: IndexedCallReference,
     classSymbolsByName: Map<string, IndexedClassSymbol[]>
@@ -339,6 +355,9 @@ export class PythonRelationResolver {
     return classCandidates[0];
   }
 
+  /**
+   * Attempts to map a call reference to a function symbol using increasingly broad strategies.
+   */
   private resolveCallTarget(
     callRef: IndexedCallReference,
     functionSymbolsByName: Map<string, IndexedFunctionSymbol[]>,
@@ -504,10 +523,16 @@ export class PythonRelationResolver {
     };
   }
 
+  /**
+   * Builds a stable lookup key for function symbols in a module scope.
+   */
   private functionScopeKey(moduleName: string, functionName: string): string {
     return `${moduleName}::${functionName}`;
   }
 
+  /**
+   * Retrieves function candidates by fully-scoped module and function name.
+   */
   private lookupScopedCandidates(
     functionSymbolsByModuleAndName: Map<string, IndexedFunctionSymbol[]>,
     moduleName: string,

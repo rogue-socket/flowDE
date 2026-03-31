@@ -1,3 +1,6 @@
+/**
+ * FlowDE webview controller for rendering the graph and handling interactive analysis tools.
+ */
 import cytoscape = require('cytoscape');
 
 declare function acquireVsCodeApi(): {
@@ -1525,6 +1528,9 @@ updateExecutionControls();
 scheduleMinimapRender();
 vscode.postMessage({ type: 'ready' });
 
+/**
+ * Rebuilds graph elements, caches node/edge lookups, and refreshes all derived UI state.
+ */
 function renderGraph(graphData: GraphData): void {
   latestGraphData = graphData;
   const displayedGraphData = buildDisplayedGraphData(graphData);
@@ -1635,6 +1641,9 @@ function renderGraph(graphData: GraphData): void {
   updateJourneyUi();
 }
 
+/**
+ * Renders the discovered flow list and keeps selection/playback controls in sync.
+ */
 function renderFlowSidebar(): void {
   flowMeta.textContent = `${flowDefinitions.length} discovered`;
   flowList.replaceChildren();
@@ -1667,6 +1676,9 @@ function renderFlowSidebar(): void {
   updatePlaybackControls();
 }
 
+/**
+ * Renders step-by-step flow entries for the selected flow.
+ */
 function renderFlowSteps(flow: FlowDefinition | undefined): void {
   flowSteps.replaceChildren();
 
@@ -1709,6 +1721,9 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
   renderExplainPanel(flow);
 }
 
+/**
+ * Applies all active highlighting overlays for flow, focus, journey, and execution states.
+ */
 function applyFlowHighlighting(): void {
   graph.elements().removeClass(
     'dimmed hidden-by-scope flow-node flow-edge flow-current flow-current-edge trail-node trail-edge trail-head trail-head-edge node-selected node-incoming node-outgoing node-impact node-dataflow edge-incoming edge-outgoing edge-impact edge-dataflow execution-visited execution-active execution-traversed'
@@ -1773,6 +1788,9 @@ function applyFlowHighlighting(): void {
   scheduleMinimapRender();
 }
 
+/**
+ * Returns the currently selected flow definition.
+ */
 function getSelectedFlow(): FlowDefinition | undefined {
   if (!selectedFlowId) {
     return undefined;
@@ -1781,6 +1799,9 @@ function getSelectedFlow(): FlowDefinition | undefined {
   return flowDefinitions.find((flow) => flow.id === selectedFlowId);
 }
 
+/**
+ * Centers or animates viewport focus onto a specific node.
+ */
 function focusNode(nodeId: string, animate: boolean): void {
   const element = graph.getElementById(nodeId);
   if (element.length === 0) {
@@ -1805,6 +1826,9 @@ function focusNode(nodeId: string, animate: boolean): void {
   graph.center(element);
 }
 
+/**
+ * Discovers likely function execution flows from call-graph topology.
+ */
 function buildFlowDefinitions(graphData: GraphData, filters: FlowFilters): FlowDefinition[] {
   const functionNodes = graphData.nodes.filter((node) => node.type === 'function');
   if (functionNodes.length === 0) {
@@ -2039,6 +2063,9 @@ function buildFlowDefinitions(graphData: GraphData, filters: FlowFilters): FlowD
     .slice(0, 40);
 }
 
+/**
+ * Chooses preferred starting nodes for flow exploration in a connected component.
+ */
 function chooseFlowStarts(
   component: string[],
   indegree: Map<string, number>,
@@ -2086,6 +2113,9 @@ function chooseFlowStarts(
   return result;
 }
 
+/**
+ * Prioritizes candidate traversal nodes to produce stable, useful flow paths.
+ */
 function prioritizeFlowCandidates(
   candidates: string[],
   outdegree: Map<string, number>,
@@ -2107,6 +2137,9 @@ function prioritizeFlowCandidates(
   });
 }
 
+/**
+ * Computes weakly connected components over directed call adjacency maps.
+ */
 function computeWeaklyConnectedComponents(
   nodes: string[],
   adjacency: Map<string, string[]>,
@@ -2149,10 +2182,16 @@ function computeWeaklyConnectedComponents(
   return components;
 }
 
+/**
+ * Creates a stable key for source->target edge lookups.
+ */
 function flowPairKey(sourceId: string, targetId: string): string {
   return `${sourceId}=>${targetId}`;
 }
 
+/**
+ * Re-renders using the latest cached graph payload.
+ */
 function rerenderGraphFromSource(): void {
   if (!latestGraphData) {
     return;
@@ -2161,10 +2200,16 @@ function rerenderGraphFromSource(): void {
   renderGraph(latestGraphData);
 }
 
+/**
+ * Updates the navigation status banner text.
+ */
 function updateNavigationStatus(message: string): void {
   navigationStatus.textContent = message;
 }
 
+/**
+ * Clears the recorded node/edge drill trail.
+ */
 function clearDrillTrail(): void {
   drillTrailState.enabled = false;
   drillTrailState.nodeSequence = [];
@@ -2172,6 +2217,9 @@ function clearDrillTrail(): void {
   updateDrillTrailStatus();
 }
 
+/**
+ * Returns unique values while preserving insertion order.
+ */
 function uniqueOrdered(values: string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -2185,6 +2233,9 @@ function uniqueOrdered(values: string[]): string[] {
   return result;
 }
 
+/**
+ * Gets active trail node ids with duplicates removed.
+ */
 function getDrillTrailNodeIds(): string[] {
   if (!drillTrailState.enabled) {
     return [];
@@ -2192,6 +2243,9 @@ function getDrillTrailNodeIds(): string[] {
   return uniqueOrdered(drillTrailState.nodeSequence);
 }
 
+/**
+ * Gets active trail edge ids with duplicates removed.
+ */
 function getDrillTrailEdgeIds(): string[] {
   if (!drillTrailState.enabled) {
     return [];
@@ -2199,6 +2253,9 @@ function getDrillTrailEdgeIds(): string[] {
   return uniqueOrdered(drillTrailState.edgeSequence);
 }
 
+/**
+ * Renders drill trail history and summary text in the sidebar.
+ */
 function updateDrillTrailStatus(): void {
   const sequence = drillTrailState.nodeSequence;
   if (sequence.length === 0) {
@@ -2218,6 +2275,9 @@ function updateDrillTrailStatus(): void {
   });
 }
 
+/**
+ * Defines priority order when multiple edge types can represent a trail transition.
+ */
 function getTrailEdgePriority(edgeType: GraphEdgeType): number {
   if (edgeType === 'call') {
     return 5;
@@ -2237,6 +2297,9 @@ function getTrailEdgePriority(edgeType: GraphEdgeType): number {
   return 0;
 }
 
+/**
+ * Resolves the best edge id connecting two selected trail nodes.
+ */
 function resolveTrailEdgeId(sourceNodeId: string, targetNodeId: string): string | undefined {
   let bestEdgeId: string | undefined;
   let bestScore = -1;
@@ -2271,6 +2334,9 @@ function resolveTrailEdgeId(sourceNodeId: string, targetNodeId: string): string 
   return bestEdgeId;
 }
 
+/**
+ * Appends node selections into a persistent drill trail history.
+ */
 function recordDrillSelection(previousNodeId: string | undefined, currentNodeId: string): void {
   if (!nodeCatalog.has(currentNodeId)) {
     return;
@@ -2301,6 +2367,9 @@ function recordDrillSelection(previousNodeId: string | undefined, currentNodeId:
   updateDrillTrailStatus();
 }
 
+/**
+ * Applies visual highlighting for recorded drill trail nodes and edges.
+ */
 function applyDrillTrailHighlighting(): void {
   if (!drillTrailState.enabled) {
     return;
@@ -2333,6 +2402,9 @@ interface DrilldownOptionsSnapshot {
   traversableEdgeIds: string[];
 }
 
+/**
+ * Collects direct incoming/outgoing traversal options from a selected node.
+ */
 function collectDirectTraversalOptions(nodeId: string): DrilldownOptionsSnapshot {
   const node = graph.getElementById(nodeId);
   if (node.length === 0) {
@@ -2389,6 +2461,9 @@ function collectDirectTraversalOptions(nodeId: string): DrilldownOptionsSnapshot
   };
 }
 
+/**
+ * Rearranges local neighborhood nodes into a drilldown layout around the selected node.
+ */
 function applyNodeDrilldownLayout(nodeId: string): void {
   const snapshot = collectDirectTraversalOptions(nodeId);
   const selected = graph.getElementById(nodeId);
@@ -2490,6 +2565,9 @@ function applyNodeDrilldownLayout(nodeId: string): void {
   );
 }
 
+/**
+ * Updates journey controls and status text.
+ */
 function updateJourneyUi(message?: string): void {
   const total = journeyState.nodeIds.length;
   const currentStep = journeyState.enabled && total > 0 ? journeyState.currentIndex + 1 : 0;
@@ -2514,6 +2592,9 @@ function updateJourneyUi(message?: string): void {
   journeyStatus.textContent = `${journeyState.mode === 'file' ? 'File Flow' : 'Code Flow'} active at ${currentNodeName}`;
 }
 
+/**
+ * Resets journey state and optionally reports a custom status message.
+ */
 function clearJourney(message?: string): void {
   journeyState.enabled = false;
   journeyState.nodeIds = [];
@@ -2528,6 +2609,9 @@ function clearJourney(message?: string): void {
   updateJourneyUi();
 }
 
+/**
+ * Applies mode-specific defaults before starting a file/code journey.
+ */
 function setJourneyModePresentation(mode: JourneyMode): void {
   graphAbstraction.autoByZoom = false;
   abstractionAutoToggle.checked = false;
@@ -2550,6 +2634,9 @@ function setJourneyModePresentation(mode: JourneyMode): void {
   syncAbstractionLevelFromZoom(true);
 }
 
+/**
+ * Builds a weighted traversal path for file or code journey mode.
+ */
 function buildJourneyPath(graphData: GraphData, mode: JourneyMode, entryNodeId: string): { nodeIds: string[]; edgeIds: string[] } {
   interface Neighbor {
     targetId: string;
@@ -2664,6 +2751,9 @@ function buildJourneyPath(graphData: GraphData, mode: JourneyMode, entryNodeId: 
   return { nodeIds, edgeIds };
 }
 
+/**
+ * Starts guided traversal from the selected journey entry node.
+ */
 function startJourney(): void {
   if (!latestGraphData) {
     updateJourneyUi('Graph not ready yet. Click Refresh and try again.');
@@ -2708,6 +2798,9 @@ function startJourney(): void {
   updateJourneyUi(`Journey started: ${journeyState.mode === 'file' ? 'File Flow' : 'Code Flow'}.`);
 }
 
+/**
+ * Moves the active journey step backward or forward.
+ */
 function stepJourney(delta: number): void {
   if (!journeyState.enabled || journeyState.nodeIds.length === 0) {
     updateJourneyUi('Start a journey first.');
@@ -2726,6 +2819,9 @@ function stepJourney(delta: number): void {
   updateJourneyUi();
 }
 
+/**
+ * Applies highlighting/masking for active journey paths.
+ */
 function applyJourneyHighlighting(): void {
   if (!journeyState.enabled || journeyState.nodeIds.length === 0) {
     return;
@@ -2767,6 +2863,9 @@ function applyJourneyHighlighting(): void {
   }
 }
 
+/**
+ * Toggles guided/full mode panel visibility and defaults.
+ */
 function setGuidedMode(enabled: boolean, rerender: boolean): void {
   guidedModeEnabled = enabled;
   viewModeButton.textContent = enabled ? 'Mode: Guided' : 'Mode: Full';
@@ -2817,12 +2916,18 @@ function setGuidedMode(enabled: boolean, rerender: boolean): void {
 
 }
 
+/**
+ * Fits the current graph content into the viewport.
+ */
 function fitGraphToCurrentView(): void {
   graph.fit(graph.elements(), 80);
   updateZoomResetLabel();
   scheduleMinimapRender();
 }
 
+/**
+ * Sets module scope filter when the module exists in the focus selector.
+ */
 function setFocusModule(moduleNodeId: string | undefined): void {
   if (!moduleNodeId) {
     focusFilters.moduleNodeId = 'all';
@@ -2841,14 +2946,24 @@ function setFocusModule(moduleNodeId: string | undefined): void {
   focusFile.value = moduleNodeId;
 }
 
+/**
+ * Resets call-path and data-flow exploration overlays to default states.
+ */
 function clearExplorationOverlays(): void {
   callPathExplorer.enabled = false;
   dataFlowExplorer.enabled = false;
+  callPathExplorer.entryNodeId = '';
+  dataFlowExplorer.sourceNodeId = '';
   latestDataFlowAnalysis = undefined;
-  callPathStatus.textContent = 'Select an entry point to explore branching paths.';
+  callPathEntry.value = '';
+  dataFlowSource.value = '';
+  callPathStatus.textContent = 'Auto mode: discovering broad flow patterns.';
   dataFlowStatus.textContent = 'Select a source node to trace data transformations.';
 }
 
+/**
+ * Switches the graph into a high-level overview state.
+ */
 function applyOverviewMode(): void {
   clearJourney('Journey cleared.');
   clearDrillTrail();
@@ -2875,6 +2990,9 @@ function applyOverviewMode(): void {
   updateNavigationStatus('Overview mode active: module-level map fitted to canvas.');
 }
 
+/**
+ * Narrows graph scope to the currently selected node and its neighborhood.
+ */
 function followCurrentSelection(): void {
   if (!selectedNodeId) {
     updateNavigationStatus('Follow selection requires choosing a node first.');
@@ -2907,6 +3025,9 @@ function followCurrentSelection(): void {
   updateNavigationStatus(`Following ${node.name}: scoped to local neighborhood.`);
 }
 
+/**
+ * Restores baseline navigation state and clears transient overlays.
+ */
 function resetNavigationState(): void {
   clearJourney('Journey cleared.');
   clearDrillTrail();
@@ -2933,6 +3054,9 @@ function resetNavigationState(): void {
   updateNavigationStatus('Navigation reset: stable file-level view restored and full graph fitted.');
 }
 
+/**
+ * Detects whether keyboard events originated from typing-capable controls.
+ */
 function isTypingContext(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
   if (!element) {
@@ -2947,6 +3071,9 @@ function isTypingContext(target: EventTarget | null): boolean {
   return element.isContentEditable;
 }
 
+/**
+ * Maps zoom level to abstraction level for auto-abstraction mode.
+ */
 function resolveAbstractionLevelForZoom(zoom: number): AbstractionLevel {
   if (zoom < 0.56) {
     return 'system';
@@ -2959,11 +3086,17 @@ function resolveAbstractionLevelForZoom(zoom: number): AbstractionLevel {
   return 'detail';
 }
 
+/**
+ * Updates abstraction mode/level status text.
+ */
 function updateAbstractionStatus(): void {
   const mode = graphAbstraction.autoByZoom ? 'auto' : 'manual';
   abstractionStatus.textContent = `${mode} | level: ${graphAbstraction.effectiveLevel}`;
 }
 
+/**
+ * Synchronizes effective abstraction with manual selection or current zoom.
+ */
 function syncAbstractionLevelFromZoom(forceRender: boolean): void {
   const previous = graphAbstraction.effectiveLevel;
   const nextLevel = graphAbstraction.autoByZoom
@@ -2979,6 +3112,9 @@ function syncAbstractionLevelFromZoom(forceRender: boolean): void {
   }
 }
 
+/**
+ * Refreshes reduction hint text based on active reduction settings.
+ */
 function updateReductionHint(): void {
   if (!reductionState.collapseInternalFunctions && !reductionState.collapseLibraries) {
     reductionHint.textContent = 'Reduction off: full graph shown.';
@@ -3003,6 +3139,9 @@ function updateReductionHint(): void {
   reductionHint.textContent = `Double-click to expand on demand (${parts.join(', ')}).`;
 }
 
+/**
+ * Expands/collapses reduced module or library aggregate nodes.
+ */
 function toggleReductionExpansion(nodeId: string): boolean {
   if (nodeId === COLLAPSED_LIBRARIES_NODE_ID && reductionState.collapseLibraries) {
     reductionState.librariesExpanded = !reductionState.librariesExpanded;
@@ -3031,6 +3170,9 @@ function toggleReductionExpansion(nodeId: string): boolean {
   return true;
 }
 
+/**
+ * Applies reduction transforms and returns the currently displayed graph projection.
+ */
 function buildDisplayedGraphData(source: GraphData): GraphData {
   const layerFiltered = buildLayerFilteredGraphData(source);
   const abstractionFiltered = buildAbstractionFilteredGraphData(layerFiltered);
@@ -3198,6 +3340,9 @@ function buildDisplayedGraphData(source: GraphData): GraphData {
   };
 }
 
+/**
+ * Filters graph to currently enabled layers.
+ */
 function buildLayerFilteredGraphData(source: GraphData): GraphData {
   const visibleLayers = new Set<GraphLayer>();
   if (layerVisibility.structural) {
@@ -3231,6 +3376,9 @@ function buildLayerFilteredGraphData(source: GraphData): GraphData {
   };
 }
 
+/**
+ * Filters graph by abstraction level and synthesizes aggregate edges when needed.
+ */
 function buildAbstractionFilteredGraphData(source: GraphData): GraphData {
   const level = graphAbstraction.effectiveLevel;
   if (level === 'detail') {
@@ -3313,6 +3461,9 @@ function buildAbstractionFilteredGraphData(source: GraphData): GraphData {
   };
 }
 
+/**
+ * Resolves a node's abstraction anchor at a target abstraction level.
+ */
 function resolveAbstractionAnchor(node: GraphNode | undefined, level: AbstractionLevel): string | undefined {
   if (!node) {
     return undefined;
@@ -3339,6 +3490,9 @@ function resolveAbstractionAnchor(node: GraphNode | undefined, level: Abstractio
   return node.id;
 }
 
+/**
+ * Recomputes flow definitions and refreshes highlights under active filters.
+ */
 function applyFlowFilters(): void {
   if (!latestDisplayedGraphData) {
     flowDefinitions = [];
@@ -3373,6 +3527,9 @@ function applyFlowFilters(): void {
   applyFlowHighlighting();
 }
 
+/**
+ * Builds call paths rooted at a selected entry function.
+ */
 function buildCallPathsFromEntry(
   graphData: GraphData,
   filters: FlowFilters,
@@ -3478,6 +3635,9 @@ function buildCallPathsFromEntry(
     .slice(0, 80);
 }
 
+  /**
+   * Counts branch nodes touched by the current set of call paths.
+   */
 function countBranchPoints(graphData: GraphData, flows: FlowDefinition[]): number {
   if (flows.length === 0) {
     return 0;
@@ -3509,6 +3669,9 @@ function countBranchPoints(graphData: GraphData, flows: FlowDefinition[]): numbe
   return branchNodes.size;
 }
 
+/**
+ * Refreshes module filter dropdown options and preserves selection when possible.
+ */
 function syncModuleFilterOptions(graphData: GraphData): void {
   const previousValue = flowModule.value || flowFilters.moduleId;
   const options = [{ value: 'all', label: 'All modules' }];
@@ -3533,6 +3696,9 @@ function syncModuleFilterOptions(graphData: GraphData): void {
   flowFilters.moduleId = resolvedValue;
 }
 
+/**
+ * Refreshes focus-file dropdown options and preserves selection when possible.
+ */
 function syncFocusFileOptions(graphData: GraphData): void {
   const previousValue = focusFile.value || focusFilters.moduleNodeId;
   const options = [{ value: 'all', label: 'All files' }];
@@ -3557,6 +3723,9 @@ function syncFocusFileOptions(graphData: GraphData): void {
   focusFilters.moduleNodeId = resolvedValue;
 }
 
+/**
+ * Synchronizes graph-edit form selectors with current graph nodes.
+ */
 function syncGraphEditOptions(graphData: GraphData): void {
   const previousCreateModule = editCreateModule.value;
   const previousMoveModule = editMoveModule.value;
@@ -3592,6 +3761,9 @@ function syncGraphEditOptions(graphData: GraphData): void {
   );
 }
 
+/**
+ * Replaces select options and restores a preferred value when available.
+ */
 function applySelectOptions(
   select: HTMLSelectElement,
   options: Array<{ value: string; label: string }>,
@@ -3611,6 +3783,9 @@ function applySelectOptions(
   select.value = resolved;
 }
 
+/**
+ * Parses comma-separated text input into trimmed non-empty tokens.
+ */
 function parseCsvValues(raw: string): string[] {
   return raw
     .split(',')
@@ -3618,6 +3793,9 @@ function parseCsvValues(raw: string): string[] {
     .filter((value) => value.length > 0);
 }
 
+  /**
+   * Synchronizes call-path and data-flow selector options.
+   */
 function syncExplorationOptions(graphData: GraphData): void {
   const previousEntry = callPathExplorer.entryNodeId || callPathEntry.value;
   const previousDataFlowSource = dataFlowExplorer.sourceNodeId || dataFlowSource.value;
@@ -3644,6 +3822,9 @@ function syncExplorationOptions(graphData: GraphData): void {
   dataFlowExplorer.sourceNodeId = dataFlowSource.value;
 }
 
+/**
+ * Synchronizes journey entry selector options for file or code mode.
+ */
 function syncJourneyEntryOptions(graphData: GraphData): void {
   const previousEntry = journeyState.entryNodeId || journeyEntrySelect.value;
   const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
@@ -3685,6 +3866,9 @@ function syncJourneyEntryOptions(graphData: GraphData): void {
   journeyState.entryNodeId = journeyEntrySelect.value;
 }
 
+/**
+ * Finds a likely function entry point inside a selected module.
+ */
 function findPreferredFunctionEntryForModule(graphData: GraphData, moduleNodeId: string): string | undefined {
   const candidates = graphData.nodes.filter(
     (node) => node.type === 'function' && getModuleNodeId(node) === moduleNodeId
@@ -3717,6 +3901,9 @@ function findPreferredFunctionEntryForModule(graphData: GraphData, moduleNodeId:
   return ranked[0]?.id;
 }
 
+/**
+ * Applies current focus filters and dependency highlighting overlays.
+ */
 function applyFocusFilters(): void {
   const keepNodeIds = new Set<string>();
   const keepEdgeIds = new Set<string>();
@@ -3747,6 +3934,9 @@ function applyFocusFilters(): void {
   applyDependencyHighlighting();
 }
 
+/**
+ * Masks nodes and edges that are outside the current kept sets.
+ */
 function applyScopeMasking(keepNodeIds: Set<string>, keepEdgeIds: Set<string>): void {
   const hide = declutterState.visibilityMode === 'hide';
   const maskClass = hide ? 'hidden-by-scope' : 'dimmed';
@@ -3764,6 +3954,9 @@ function applyScopeMasking(keepNodeIds: Set<string>, keepEdgeIds: Set<string>): 
   });
 }
 
+/**
+ * Applies selected-node dependency traversal highlighting and status text.
+ */
 function applyDependencyHighlighting(): void {
   if (journeyState.enabled) {
     latestDependencyAnalysis = undefined;
@@ -3875,6 +4068,9 @@ function applyDependencyHighlighting(): void {
   updateNodeInspector();
 }
 
+/**
+ * Computes upstream/downstream dependency traversal snapshot from a root node.
+ */
 function analyzeDependencyTraversal(
   rootNodeId: string,
   maxHops: number
@@ -3944,6 +4140,9 @@ function analyzeDependencyTraversal(
   };
 }
 
+/**
+ * Returns whether an edge type is allowed in dependency traversal analysis.
+ */
 function isDependencyTraversableEdge(edge: cytoscape.EdgeSingular): boolean {
   const edgeType = String(edge.data('type'));
   return (
@@ -3954,6 +4153,9 @@ function isDependencyTraversableEdge(edge: cytoscape.EdgeSingular): boolean {
   );
 }
 
+/**
+ * Applies data-flow reachability highlighting from the selected source node.
+ */
 function applyDataFlowHighlighting(): void {
   if (journeyState.enabled) {
     latestDataFlowAnalysis = undefined;
@@ -4002,6 +4204,9 @@ function applyDataFlowHighlighting(): void {
   ].join('\n');
 }
 
+/**
+ * Computes data-flow traversal in forward, backward, or bidirectional modes.
+ */
 function analyzeDataFlowTraversal(
   sourceNodeId: string,
   maxHops: number,
@@ -4074,11 +4279,17 @@ function analyzeDataFlowTraversal(
   };
 }
 
+/**
+ * Returns whether an edge contributes to data-flow traversal.
+ */
 function isDataFlowTraversableEdge(edge: cytoscape.EdgeSingular): boolean {
   const edgeType = String(edge.data('type'));
   return edgeType === 'dataflow' || edgeType === 'call';
 }
 
+/**
+ * Requests source navigation for a selected graph node.
+ */
 function openNodeSource(nodeId: string): void {
   const node = nodeCatalog.get(nodeId);
   if (!node || !node.filePath || typeof node.line !== 'number') {
@@ -4091,6 +4302,9 @@ function openNodeSource(nodeId: string): void {
   });
 }
 
+/**
+ * Updates the node inspector panel with current metrics and runtime details.
+ */
 function updateNodeInspector(): void {
   if (!selectedNodeId) {
     nodeInspector.textContent = 'Click a node to inspect dependencies.';
@@ -4160,6 +4374,9 @@ function updateNodeInspector(): void {
   openSourceButton.disabled = !(node.filePath && typeof node.line === 'number');
 }
 
+/**
+ * Starts timed flow-step playback.
+ */
 function startPlayback(): void {
   const flow = getSelectedFlow();
   if (!flow || flow.nodeIds.length === 0) {
@@ -4182,6 +4399,9 @@ function startPlayback(): void {
   updatePlaybackControls();
 }
 
+/**
+ * Stops flow-step playback.
+ */
 function stopPlayback(): void {
   if (playbackTimer) {
     clearInterval(playbackTimer);
@@ -4193,6 +4413,9 @@ function stopPlayback(): void {
   updatePlaybackControls();
 }
 
+/**
+ * Advances the selected flow by one step.
+ */
 function advanceStep(): boolean {
   const flow = getSelectedFlow();
   if (!flow || flow.nodeIds.length === 0) {
@@ -4211,6 +4434,9 @@ function advanceStep(): boolean {
   return true;
 }
 
+/**
+ * Enables/disables flow playback controls based on current selection.
+ */
 function updatePlaybackControls(): void {
   const flow = getSelectedFlow();
   const hasFlow = Boolean(flow && flow.nodeIds.length > 0);
@@ -4221,6 +4447,9 @@ function updatePlaybackControls(): void {
   flowPlayButton.disabled = !hasFlow;
 }
 
+/**
+ * Resets runtime trace state before a new trace stream begins.
+ */
 function resetExecutionTrace(entryFilePath: string): void {
   stopExecutionPlayback();
   executionEvents.splice(0, executionEvents.length);
@@ -4238,6 +4467,9 @@ function resetExecutionTrace(entryFilePath: string): void {
   rerenderGraphFromSource();
 }
 
+/**
+ * Ingests a runtime event and updates execution overlays.
+ */
 function ingestExecutionEvent(traceEvent: ExecutionTraceEvent): void {
   executionEvents.push(traceEvent);
   executionCursor = executionEvents.length - 1;
@@ -4251,6 +4483,9 @@ function ingestExecutionEvent(traceEvent: ExecutionTraceEvent): void {
   updateExecutionControls();
 }
 
+/**
+ * Finalizes runtime trace session state and summary status.
+ */
 function completeExecutionTrace(summary: { totalEvents: number; exitCode?: number; stopped?: boolean }): void {
   executionTraceRunning = false;
   stopExecutionPlayback();
@@ -4271,6 +4506,9 @@ function completeExecutionTrace(summary: { totalEvents: number; exitCode?: numbe
   applyExecutionOverlay(false);
 }
 
+/**
+ * Starts execution event playback animation.
+ */
 function startExecutionPlayback(): void {
   if (executionEvents.length === 0) {
     return;
@@ -4292,6 +4530,9 @@ function startExecutionPlayback(): void {
   }, 520);
 }
 
+/**
+ * Stops execution event playback animation.
+ */
 function stopExecutionPlayback(): void {
   if (executionPlaybackTimer) {
     clearInterval(executionPlaybackTimer);
@@ -4303,6 +4544,9 @@ function stopExecutionPlayback(): void {
   updateExecutionControls();
 }
 
+/**
+ * Moves execution cursor by delta and refreshes overlays.
+ */
 function stepExecution(delta: number, autoFocus = true): boolean {
   if (executionEvents.length === 0) {
     return false;
@@ -4320,6 +4564,9 @@ function stepExecution(delta: number, autoFocus = true): boolean {
   return true;
 }
 
+/**
+ * Enables/disables execution controls based on trace and cursor state.
+ */
 function updateExecutionControls(): void {
   const hasEvents = executionEvents.length > 0;
   const hasCursor = executionCursor >= 0;
@@ -4332,6 +4579,9 @@ function updateExecutionControls(): void {
   executionPlayButton.textContent = isExecutionPlaybackRunning ? 'Pause' : 'Play';
 }
 
+/**
+ * Removes transient execution-path edges generated during playback.
+ */
 function clearDynamicExecutionEdges(): void {
   if (dynamicExecutionEdgeIds.size === 0) {
     return;
@@ -4344,6 +4594,9 @@ function clearDynamicExecutionEdges(): void {
   dynamicExecutionEdgeIds.clear();
 }
 
+/**
+ * Applies runtime execution highlighting for visited/current nodes and transitions.
+ */
 function applyExecutionOverlay(autoFocus: boolean): void {
   graph.nodes().removeClass('execution-visited execution-active');
   graph.edges().removeClass('execution-traversed');
@@ -4413,6 +4666,9 @@ function applyExecutionOverlay(autoFocus: boolean): void {
   scheduleMinimapRender();
 }
 
+/**
+ * Updates execution node-state panel for the current runtime event.
+ */
 function updateExecutionNodeState(event: ExecutionTraceEvent | undefined): void {
   if (!event) {
     executionNodeState.textContent = executionEvents.length === 0
@@ -4446,10 +4702,16 @@ function updateExecutionNodeState(event: ExecutionTraceEvent | undefined): void 
   executionNodeState.textContent = lines.join('\n');
 }
 
+/**
+ * Formats a runtime object for inspector display.
+ */
 function formatRuntimeObject(value: Record<string, unknown>): string {
   return formatRuntimeValue(value);
 }
 
+/**
+ * Formats runtime values as compact JSON-like text.
+ */
 function formatRuntimeValue(value: unknown): string {
   try {
     const json = JSON.stringify(value);
@@ -4463,6 +4725,9 @@ function formatRuntimeValue(value: unknown): string {
   }
 }
 
+/**
+ * Renders explanatory metadata for the currently selected flow step.
+ */
 function renderExplainPanel(flow: FlowDefinition | undefined): void {
   if (!flow || typeof selectedStepIndex !== 'number' || selectedStepIndex < 0) {
     flowExplain.textContent = 'Select a flow step to inspect confidence and reasoning.';
@@ -4506,6 +4771,9 @@ function renderExplainPanel(flow: FlowDefinition | undefined): void {
   flowExplain.textContent = lines.join('\n');
 }
 
+/**
+ * Reads edge confidence with sane fallback and clamping.
+ */
 function getEdgeConfidence(edge: GraphEdge): number {
   const raw = edge.metadata?.confidence;
   if (typeof raw !== 'number' || Number.isNaN(raw)) {
@@ -4515,6 +4783,9 @@ function getEdgeConfidence(edge: GraphEdge): number {
   return clamp(raw, 0, 1);
 }
 
+/**
+ * Applies selected layout mode to currently displayed graph data.
+ */
 function applyLayout(graphData: GraphData, shouldFit: boolean): void {
   if (graphData.nodes.length === 0) {
     return;
@@ -4537,6 +4808,9 @@ function applyLayout(graphData: GraphData, shouldFit: boolean): void {
   });
 }
 
+/**
+ * Applies deterministic clustered layout positions.
+ */
 function applyClusteredLayout(graphData: GraphData, shouldFit: boolean): void {
   const positions = computeClusteredPositions(graphData);
   const positionMap: Record<string, Point> = {};
@@ -4553,6 +4827,9 @@ function applyClusteredLayout(graphData: GraphData, shouldFit: boolean): void {
   });
 }
 
+/**
+ * Computes clustered positions for modules, functions, classes, and variables.
+ */
 function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
   const positions = new Map<string, Point>();
   const nodeById = new Map<string, GraphNode>();
@@ -4780,6 +5057,9 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
   return positions;
 }
 
+/**
+ * Builds node label text, including reduction counters where relevant.
+ */
 function formatNodeLabel(node: GraphNode): string {
   if (node.id === COLLAPSED_LIBRARIES_NODE_ID) {
     const count = typeof node.metadata?.collapsedLibrariesCount === 'number'
@@ -4799,16 +5079,25 @@ function formatNodeLabel(node: GraphNode): string {
   return node.name;
 }
 
+/**
+ * Returns a node's module id from metadata.
+ */
 function getModuleNodeId(node: GraphNode): string | undefined {
   const rawValue = node.metadata?.moduleNodeId;
   return typeof rawValue === 'string' ? rawValue : undefined;
 }
 
+/**
+ * Returns a node's function id from metadata.
+ */
 function getFunctionNodeId(node: GraphNode): string | undefined {
   const rawValue = node.metadata?.functionNodeId;
   return typeof rawValue === 'string' ? rawValue : undefined;
 }
 
+/**
+ * Resolves module id for a node, including module nodes themselves.
+ */
 function thisNodeModuleId(node: GraphNode | undefined): string | undefined {
   if (!node) {
     return undefined;
@@ -4821,6 +5110,9 @@ function thisNodeModuleId(node: GraphNode | undefined): string | undefined {
   return getModuleNodeId(node);
 }
 
+/**
+ * Adjusts zoom by a multiplicative factor centered on viewport midpoint.
+ */
 function zoomByFactor(factor: number): void {
   const nextZoom = clamp(graph.zoom() * factor, MIN_ZOOM, MAX_ZOOM);
   graph.zoom({
@@ -4830,14 +5122,23 @@ function zoomByFactor(factor: number): void {
   updateZoomResetLabel();
 }
 
+/**
+ * Clamps numeric values to an inclusive range.
+ */
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+/**
+ * Updates zoom reset button label from current zoom level.
+ */
 function updateZoomResetLabel(): void {
   zoomResetButton.textContent = `${Math.round(graph.zoom() * 100)}%`;
 }
 
+/**
+ * Runs a Cytoscape layout and refreshes viewport-dependent UI after completion.
+ */
 function runLayout(options: cytoscape.LayoutOptions): void {
   const layout = graph.layout(options);
   graph.one('layoutstop', () => {
@@ -4847,6 +5148,9 @@ function runLayout(options: cytoscape.LayoutOptions): void {
   layout.run();
 }
 
+/**
+ * Pans graph viewport so the provided model point is centered.
+ */
 function centerGraphAtModelPoint(modelX: number, modelY: number): void {
   const zoom = graph.zoom();
   graph.pan({
@@ -4856,6 +5160,9 @@ function centerGraphAtModelPoint(modelX: number, modelY: number): void {
   scheduleMinimapRender();
 }
 
+/**
+ * Schedules a minimap redraw on the next animation frame.
+ */
 function scheduleMinimapRender(): void {
   if (minimapUpdateRequested) {
     return;
@@ -4868,6 +5175,9 @@ function scheduleMinimapRender(): void {
   });
 }
 
+/**
+ * Renders minimap content and viewport rectangle.
+ */
 function renderMinimap(): void {
   const cssWidth = minimapCanvas.clientWidth;
   const cssHeight = minimapCanvas.clientHeight;
@@ -4908,6 +5218,9 @@ function renderMinimap(): void {
   drawMinimapViewport(scale, offsetX, offsetY);
 }
 
+/**
+ * Draws node points into the minimap.
+ */
 function drawMinimapNodes(scale: number, offsetX: number, offsetY: number): void {
   for (const node of graph.nodes()) {
     const position = node.position();
@@ -4930,6 +5243,9 @@ function drawMinimapNodes(scale: number, offsetX: number, offsetY: number): void
   }
 }
 
+/**
+ * Draws current viewport bounds into the minimap overlay.
+ */
 function drawMinimapViewport(scale: number, offsetX: number, offsetY: number): void {
   const viewport = getVisibleModelBounds();
   const x = viewport.x1 * scale + offsetX;
@@ -4944,6 +5260,9 @@ function drawMinimapViewport(scale: number, offsetX: number, offsetY: number): v
   minimapContext.strokeRect(x, y, width, height);
 }
 
+/**
+ * Returns current visible model-space bounds.
+ */
 function getVisibleModelBounds(): { x1: number; y1: number; x2: number; y2: number } {
   const pan = graph.pan();
   const zoom = graph.zoom();
@@ -4956,6 +5275,9 @@ function getVisibleModelBounds(): { x1: number; y1: number; x2: number; y2: numb
   };
 }
 
+/**
+ * Resolves a required DOM element and throws if missing.
+ */
 function getRequiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
   if (!element) {
@@ -4965,6 +5287,9 @@ function getRequiredElement<T extends Element>(selector: string): T {
   return element;
 }
 
+/**
+ * Returns required 2D canvas context for minimap rendering.
+ */
 function getRequiredCanvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   const context = canvas.getContext('2d');
   if (!context) {

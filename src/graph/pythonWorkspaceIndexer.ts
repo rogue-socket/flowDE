@@ -14,6 +14,9 @@ import {
 } from './semanticTypes';
 import { WorkspaceGraphCache } from './workspaceGraphCache';
 
+/**
+ * Glob used to skip noisy or generated folders while indexing Python sources.
+ */
 const PYTHON_EXCLUDE_GLOB = '**/{.git,node_modules,.venv,venv,__pycache__,dist}/**';
 const PYTHON_IDENTIFIERS_TO_SKIP = new Set([
   'and',
@@ -51,9 +54,15 @@ const PYTHON_IDENTIFIERS_TO_SKIP = new Set([
   'yield'
 ]);
 
+/**
+ * Scans workspace Python files and extracts symbols and references for graph building.
+ */
 export class PythonWorkspaceIndexer {
   constructor(private readonly cache: WorkspaceGraphCache) {}
 
+  /**
+   * Indexes all Python files in a workspace and returns parse/cache statistics.
+   */
   public async indexWorkspace(workspaceFolder: vscode.WorkspaceFolder): Promise<IndexingResult> {
     const files = await vscode.workspace.findFiles(
       new vscode.RelativePattern(workspaceFolder, '**/*.py'),
@@ -115,6 +124,9 @@ export class PythonWorkspaceIndexer {
     };
   }
 
+  /**
+   * Builds a full indexed module payload from source text.
+   */
   private indexPythonFile(relativePath: string, source: string): IndexedModule {
     const moduleName = this.moduleNameFromPath(relativePath);
     const moduleNodeId = `module:${relativePath}`;
@@ -146,6 +158,9 @@ export class PythonWorkspaceIndexer {
     };
   }
 
+  /**
+   * Creates a minimal module when parsing fails so graph generation can continue.
+   */
   private createFallbackModule(relativePath: string): IndexedModule {
     const moduleName = this.moduleNameFromPath(relativePath);
     return {
@@ -170,6 +185,9 @@ export class PythonWorkspaceIndexer {
     };
   }
 
+  /**
+   * Parses the syntax tree to collect classes, functions, variables, call refs, and data-flow refs.
+   */
   private collectSymbolsAndRelations(
     source: string,
     relativePath: string,
@@ -363,6 +381,9 @@ export class PythonWorkspaceIndexer {
     }
   }
 
+  /**
+   * Extracts normalized parameter names from a function parameter list.
+   */
   private extractFunctionParameterNames(node: SyntaxNode, source: string): string[] {
     const paramListNode = this.findFirstChildByType(node, 'ParamList');
     if (!paramListNode) {
@@ -387,6 +408,9 @@ export class PythonWorkspaceIndexer {
       .filter((name) => !PYTHON_IDENTIFIERS_TO_SKIP.has(name.toLowerCase()));
   }
 
+  /**
+   * Parses a simple assignment expression into target and source components.
+   */
   private extractAssignmentExpression(
     statement: string
   ): { left: string[]; right: string } | undefined {
@@ -410,6 +434,9 @@ export class PythonWorkspaceIndexer {
     };
   }
 
+  /**
+   * Extracts unique identifier tokens from an expression while skipping keywords.
+   */
   private extractIdentifierNames(expression: string): string[] {
     const matches = expression.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
     const unique = new Set<string>();
@@ -426,6 +453,9 @@ export class PythonWorkspaceIndexer {
     return [...unique];
   }
 
+  /**
+   * Parses import statements into dependency and import-binding artifacts.
+   */
   private extractImportArtifacts(
     source: string,
     moduleName: string,
@@ -482,6 +512,9 @@ export class PythonWorkspaceIndexer {
     };
   }
 
+  /**
+   * Converts a relative file path to a dotted Python module name.
+   */
   private moduleNameFromPath(relativePath: string): string {
     const withoutExtension = relativePath.replace(/\.py$/, '');
     const dotted = withoutExtension.replace(/\//g, '.');
@@ -491,6 +524,9 @@ export class PythonWorkspaceIndexer {
     return dotted;
   }
 
+  /**
+   * Finds the first direct child node of a given syntax type.
+   */
   private findFirstChildByType(node: SyntaxNode, typeName: string): SyntaxNode | undefined {
     for (let child = node.firstChild; child; child = child.nextSibling) {
       if (child.type.name === typeName) {
@@ -501,6 +537,9 @@ export class PythonWorkspaceIndexer {
     return undefined;
   }
 
+  /**
+   * Extracts a normalized callee token path from a call expression.
+   */
   private extractCalleePath(node: SyntaxNode, source: string): string[] | undefined {
     let calleeNode: SyntaxNode | undefined;
 
@@ -524,6 +563,9 @@ export class PythonWorkspaceIndexer {
     return parts;
   }
 
+  /**
+   * Parses import targets of the form "name" or "name as alias".
+   */
   private parseAliasedTarget(target: string): { name: string; alias?: string } | undefined {
     const normalizedTarget = target.trim();
     if (!normalizedTarget) {
@@ -541,6 +583,9 @@ export class PythonWorkspaceIndexer {
     };
   }
 
+  /**
+   * Resolves absolute and relative import module references to canonical module names.
+   */
   private resolveImportModule(
     rawImportModule: string,
     currentModuleName: string,
@@ -572,6 +617,9 @@ export class PythonWorkspaceIndexer {
     return resolvedParts.length > 0 ? resolvedParts.join('.') : undefined;
   }
 
+  /**
+   * Returns the package name for a module, accounting for package initializer files.
+   */
   private packageNameFromModule(moduleName: string, relativePath: string): string {
     if (relativePath.endsWith('/__init__.py') || relativePath === '__init__.py') {
       return moduleName;
@@ -585,6 +633,9 @@ export class PythonWorkspaceIndexer {
     return moduleName.slice(0, lastDotIndex);
   }
 
+  /**
+   * Builds a list of line-start offsets for fast offset-to-line conversion.
+   */
   private buildLineStartMap(source: string): number[] {
     const lineStarts = [0];
     for (let index = 0; index < source.length; index += 1) {
@@ -595,6 +646,9 @@ export class PythonWorkspaceIndexer {
     return lineStarts;
   }
 
+  /**
+   * Converts a source offset into a 1-based line number.
+   */
   private positionToLine(lineStarts: number[], offset: number): number {
     let low = 0;
     let high = lineStarts.length - 1;

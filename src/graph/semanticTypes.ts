@@ -1,5 +1,8 @@
 import { GraphEdge, GraphNode } from './schema';
 
+/**
+ * Symbol discovered from a function definition.
+ */
 export interface IndexedFunctionSymbol {
   id: string;
   name: string;
@@ -11,6 +14,9 @@ export interface IndexedFunctionSymbol {
   className?: string;
 }
 
+/**
+ * Symbol discovered from a class definition.
+ */
 export interface IndexedClassSymbol {
   id: string;
   name: string;
@@ -20,6 +26,9 @@ export interface IndexedClassSymbol {
   moduleName: string;
 }
 
+/**
+ * Symbol discovered from a variable binding in module or function scope.
+ */
 export interface IndexedVariableSymbol {
   id: string;
   name: string;
@@ -30,6 +39,9 @@ export interface IndexedVariableSymbol {
   functionNodeId?: string;
 }
 
+/**
+ * Indexed data-flow relationship derived from assignment, parameters, or returns.
+ */
 export interface IndexedDataFlowReference {
   sourceNodeId: string;
   targetNodeId: string;
@@ -37,6 +49,9 @@ export interface IndexedDataFlowReference {
   reason: string;
 }
 
+/**
+ * Indexed call-site relationship discovered in function bodies.
+ */
 export interface IndexedCallReference {
   sourceFunctionId: string;
   sourceModuleId: string;
@@ -45,6 +60,9 @@ export interface IndexedCallReference {
   calleePath: string[];
 }
 
+/**
+ * Import alias mapping used for relation disambiguation.
+ */
 export interface ImportBinding {
   alias: string;
   kind: 'module' | 'symbol';
@@ -52,6 +70,9 @@ export interface ImportBinding {
   symbolName?: string;
 }
 
+/**
+ * Complete parsed module payload produced by the indexer.
+ */
 export interface IndexedModule {
   relativePath: string;
   moduleName: string;
@@ -66,6 +87,9 @@ export interface IndexedModule {
   warning?: string;
 }
 
+/**
+ * Aggregate workspace indexing result including parse/cache diagnostics.
+ */
 export interface IndexingResult {
   modules: IndexedModule[];
   fileCount: number;
@@ -76,6 +100,9 @@ export interface IndexingResult {
   };
 }
 
+/**
+ * Summary counters from relation resolution.
+ */
 export interface ResolutionDiagnostics {
   resolvedCalls: number;
   unresolvedCalls: number;
@@ -86,6 +113,9 @@ export interface ResolutionDiagnostics {
   indexedVariables: number;
 }
 
+/**
+ * Final resolved graph artifacts and diagnostics.
+ */
 export interface ResolutionResult {
   nodes: GraphNode[];
   edges: GraphEdge[];

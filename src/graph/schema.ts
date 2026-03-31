@@ -1,3 +1,6 @@
+/**
+ * Shared graph contracts exchanged between extension host and webview.
+ */
 export type GraphLayer = 'structural' | 'dependency' | 'dataflow' | 'execution';
 export type GraphNodeType = 'function' | 'variable' | 'module' | 'class';
 export type GraphNodeRole =
@@ -16,6 +19,9 @@ export type GraphEdgeType =
   | 'execution-path';
 export type GraphEdgeProvenance = 'containment' | 'ast' | 'import-map' | 'heuristic';
 
+/**
+ * Optional metadata attached to graph nodes for feature-specific rendering and lookup.
+ */
 export interface GraphNodeMetadata {
   moduleNodeId?: string;
   external?: boolean;
@@ -23,6 +29,9 @@ export interface GraphNodeMetadata {
   [key: string]: unknown;
 }
 
+/**
+ * Optional metadata attached to edges to describe confidence and derivation strategy.
+ */
 export interface GraphEdgeMetadata {
   confidence?: number;
   provenance?: GraphEdgeProvenance;
@@ -30,6 +39,9 @@ export interface GraphEdgeMetadata {
   [key: string]: unknown;
 }
 
+/**
+ * Diagnostics emitted by the graph pipeline and shown in the webview status UI.
+ */
 export interface GraphDiagnostics {
   resolvedCalls: number;
   unresolvedCalls: number;
@@ -42,12 +54,18 @@ export interface GraphDiagnostics {
   parserCacheMisses: number;
 }
 
+/**
+ * Per-layer counts used for default visibility and summary displays.
+ */
 export interface GraphLayerStats {
   nodes: number;
   edges: number;
   visibleByDefault: boolean;
 }
 
+/**
+ * Canonical node representation consumed by the graph renderer.
+ */
 export interface GraphNode {
   id: string;
   type: GraphNodeType;
@@ -60,6 +78,9 @@ export interface GraphNode {
   metadata?: GraphNodeMetadata;
 }
 
+/**
+ * Canonical directed edge representation consumed by the graph renderer.
+ */
 export interface GraphEdge {
   id: string;
   source: string;
@@ -69,6 +90,9 @@ export interface GraphEdge {
   metadata?: GraphEdgeMetadata;
 }
 
+/**
+ * Fully materialized graph payload for a workspace snapshot.
+ */
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];

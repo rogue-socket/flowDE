@@ -4,11 +4,17 @@ import { PythonRelationResolver } from './pythonRelationResolver';
 import { PythonWorkspaceIndexer } from './pythonWorkspaceIndexer';
 import { WorkspaceGraphCache } from './workspaceGraphCache';
 
+/**
+ * Builds the complete workspace graph by combining indexing and relationship resolution.
+ */
 export class PythonWorkspaceGraphBuilder {
   private readonly cache = new WorkspaceGraphCache();
   private readonly indexer = new PythonWorkspaceIndexer(this.cache);
   private readonly resolver = new PythonRelationResolver();
 
+  /**
+   * Produces graph nodes, edges, and diagnostics for a workspace folder.
+   */
   public async buildGraph(workspaceFolder: vscode.WorkspaceFolder): Promise<GraphData> {
     const indexing = await this.indexer.indexWorkspace(workspaceFolder);
     const resolution = this.resolver.resolve(indexing.modules);
@@ -39,6 +45,9 @@ export class PythonWorkspaceGraphBuilder {
     };
   }
 
+  /**
+   * Computes per-layer node and edge counts used by the webview layer controls.
+   */
   private computeLayerStats(
     nodes: GraphData['nodes'],
     edges: GraphData['edges']

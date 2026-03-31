@@ -1,3 +1,6 @@
+/**
+ * Embedded Python tracer script executed in a subprocess during runtime tracing.
+ */
 export const FLOWDE_PYTHON_TRACER = [
   'import json',
   'import os',
@@ -9,6 +12,7 @@ export const FLOWDE_PYTHON_TRACER = [
   "TRACE_PREFIX = 'FLOWDE_TRACE:'",
   '',
   'def emit(payload):',
+  '    """Emit a single structured trace payload to stderr with the FlowDE prefix."""',
   '    try:',
   '        serialized = json.dumps(payload, ensure_ascii=False)',
   '    except Exception as serialization_error:',
@@ -17,6 +21,7 @@ export const FLOWDE_PYTHON_TRACER = [
   '    sys.stderr.flush()',
   '',
   'def safe_value(value):',
+  '    """Return JSON-safe values, falling back to repr for non-serializable objects."""',
   '    try:',
   '        json.dumps(value)',
   '        return value',
@@ -24,6 +29,7 @@ export const FLOWDE_PYTHON_TRACER = [
   '        return repr(value)',
   '',
   'def snapshot_locals(values):',
+  '    """Capture non-dunder locals from the current frame for timeline inspection."""',
   '    snapshot = {}',
   '    for key, value in values.items():',
   "        if key.startswith('__'):",
@@ -32,6 +38,7 @@ export const FLOWDE_PYTHON_TRACER = [
   '    return snapshot',
   '',
   'def snapshot_inputs(frame):',
+  '    """Capture declared positional and keyword-only function inputs from frame locals."""',
   '    arg_count = frame.f_code.co_argcount + frame.f_code.co_kwonlyargcount',
   '    names = list(frame.f_code.co_varnames[:arg_count])',
   '    captured = {}',
@@ -41,6 +48,7 @@ export const FLOWDE_PYTHON_TRACER = [
   '    return captured',
   '',
   'def make_tracer(workspace_root):',
+  '    """Create a sys.settrace callback limited to files inside the workspace root."""',
   '    workspace_root = os.path.abspath(workspace_root)',
   '    tracer_file = os.path.abspath(__file__)',
   '',
@@ -77,6 +85,7 @@ export const FLOWDE_PYTHON_TRACER = [
   '    return tracer',
   '',
   'def main():',
+  '    """Entrypoint that runs target Python code while streaming trace events."""',
   '    if len(sys.argv) < 3:',
   "        emit({'event': 'trace_error', 'message': 'Usage: tracer.py <entry_path> <workspace_root> [args...]'})",
   '        return 2',
