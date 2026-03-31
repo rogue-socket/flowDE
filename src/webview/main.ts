@@ -758,7 +758,17 @@ graph.on('tap', 'node', (event: cytoscape.EventObject) => {
     }
   }
 
+  // Clicking a node should immediately open a navigable local neighborhood.
+  focusFilters.moduleNodeId = 'all';
+  focusFile.value = 'all';
+  focusFilters.neighborhoodOnly = true;
+  focusNeighborhood.checked = true;
+  dependencyTraversal.maxHops = 1;
+  dependencyHops.value = '1';
+  dependencyHopsValue.textContent = '1';
+
   applyFlowHighlighting();
+  applyNodeDrilldownLayout(nodeId);
 });
 
 graph.on('dbltap', 'node', (event: cytoscape.EventObject) => {
@@ -2083,6 +2093,145 @@ function rerenderGraphFromSource(): void {
 
 function updateNavigationStatus(message: string): void {
   navigationStatus.textContent = message;
+}
+
+interface DrilldownOptionsSnapshot {
+  incomingNodeIds: string[];
+  outgoingNodeIds: string[];
+  traversableEdgeIds: string[];
+}
+
+function collectDirectTraversalOptions(nodeId: string): DrilldownOptionsSnapshot {
+  const node = graph.getElementById(nodeId);
+  if (node.length === 0) {
+    return {
+      incomingNodeIds: [],
+      outgoingNodeIds: [],
+      traversableEdgeIds: []
+    };
+  }
+
+  const incomingNodeIds = new Set<string>();
+  const outgoingNodeIds = new Set<string>();
+  const traversableEdgeIds = new Set<string>();
+
+  node.incomers('edge').forEach((edge) => {
+    if (!isDependencyTraversableEdge(edge)) {
+      return;
+    }
+
+    const sourceId = edge.source().id();
+    if (!sourceId || sourceId === nodeId) {
+      return;
+    }
+
+    incomingNodeIds.add(sourceId);
+    traversableEdgeIds.add(edge.id());
+  });
+
+  node.outgoers('edge').forEach((edge) => {
+    if (!isDependencyTraversableEdge(edge)) {
+      return;
+    }
+
+    const targetId = edge.target().id();
+    if (!targetId || targetId === nodeId) {
+      return;
+    }
+
+    outgoingNodeIds.add(targetId);
+    traversableEdgeIds.add(edge.id());
+  });
+
+  const sortByName = (ids: Set<string>): string[] =>
+    [...ids].sort((a, b) => {
+      const aName = nodeCatalog.get(a)?.name ?? a;
+      const bName = nodeCatalog.get(b)?.name ?? b;
+      return aName.localeCompare(bName);
+    });
+
+  return {
+    incomingNodeIds: sortByName(incomingNodeIds),
+    outgoingNodeIds: sortByName(outgoingNodeIds),
+    traversableEdgeIds: [...traversableEdgeIds]
+  };
+}
+
+function applyNodeDrilldownLayout(nodeId: string): void {
+  const snapshot = collectDirectTraversalOptions(nodeId);
+  const selected = graph.getElementById(nodeId);
+  if (selected.length === 0) {
+    return;
+  }
+
+  const spacingFactor = 0.9 + declutterState.layoutSpacing * 0.28;
+  const rowSpacing = 108 * spacingFactor;
+  const branchBaseX = 250 * spacingFactor;
+  const branchColumnGap = 132 * spacingFactor;
+  const rowsPerColumn = 8;
+
+  const positions = new Map<string, Point>();
+  positions.set(nodeId, { x: 0, y: 0 });
+
+  const selectedNode = nodeCatalog.get(nodeId);
+  const selectedModuleId = selectedNode ? getModuleNodeId(selectedNode) : undefined;
+  if (selectedModuleId && selectedModuleId !== nodeId) {
+    const moduleElement = graph.getElementById(selectedModuleId);
+    if (moduleElement.length > 0 && !moduleElement.hasClass('hidden-by-scope')) {
+      positions.set(selectedModuleId, { x: 0, y: -170 * spacingFactor });
+    }
+  }
+
+  const assignSide = (ids: string[], side: 'left' | 'right'): void => {
+    ids.forEach((targetId, index) => {
+      const element = graph.getElementById(targetId);
+      if (element.length === 0 || element.hasClass('hidden-by-scope')) {
+        return;
+      }
+
+      const column = Math.floor(index / rowsPerColumn);
+      const rowInColumn = index % rowsPerColumn;
+      const rowsInColumn = Math.min(rowsPerColumn, ids.length - column * rowsPerColumn);
+      const y = (rowInColumn - (rowsInColumn - 1) / 2) * rowSpacing;
+      const x = (side === 'left' ? -1 : 1) * (branchBaseX + column * branchColumnGap);
+      positions.set(targetId, { x, y });
+    });
+  };
+
+  assignSide(snapshot.incomingNodeIds, 'left');
+  assignSide(snapshot.outgoingNodeIds, 'right');
+
+  const neighborhood = graph.collection();
+  for (const [targetId, point] of positions.entries()) {
+    const element = graph.getElementById(targetId);
+    if (element.length === 0) {
+      continue;
+    }
+
+    neighborhood.merge(element);
+    element.animate(
+      {
+        position: point
+      },
+      {
+        duration: 240,
+        easing: 'ease-out-cubic'
+      }
+    );
+  }
+
+  window.setTimeout(() => {
+    if (neighborhood.length > 0) {
+      graph.fit(neighborhood, 110);
+    }
+    updateZoomResetLabel();
+    scheduleMinimapRender();
+  }, 250);
+
+  const selectedName = nodeCatalog.get(nodeId)?.name ?? nodeId;
+  updateNavigationStatus(
+    `${selectedName}: ${snapshot.outgoingNodeIds.length} outgoing option${snapshot.outgoingNodeIds.length === 1 ? '' : 's'}, ${snapshot.incomingNodeIds.length} incoming.`
+  );
 }
 
 function updateJourneyUi(message?: string): void {
