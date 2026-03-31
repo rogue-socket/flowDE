@@ -1186,6 +1186,7 @@ class FlowDEPanel implements vscode.Disposable {
               </div>
               <p id="journey-meta" class="journey-meta">Step 0 / 0</p>
               <p id="journey-status" class="journey-status">Pick a mode and entry, then Start to walk the graph.</p>
+              <p id="trail-status" class="trail-status">Chosen path: none</p>
             </div>
             <p id="navigation-status" class="navigation-status">
               Overview Mode switches to module-level and fits the full graph.

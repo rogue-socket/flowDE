@@ -223,6 +223,18 @@ body {
   line-height: 1.4;
 }
 
+.trail-status {
+  margin: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-bg) 86%, black 6%);
+  color: color-mix(in srgb, var(--panel-fg) 82%, transparent);
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 7px;
+  white-space: pre-wrap;
+}
+
 .navigation-status,
 .navigation-shortcuts {
   margin: 0;

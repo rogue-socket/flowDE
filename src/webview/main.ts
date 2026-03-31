@@ -249,6 +249,7 @@ const journeyNextButton = getRequiredElement<HTMLButtonElement>('#journey-next-b
 const journeyClearButton = getRequiredElement<HTMLButtonElement>('#journey-clear-btn');
 const journeyMeta = getRequiredElement<HTMLElement>('#journey-meta');
 const journeyStatus = getRequiredElement<HTMLElement>('#journey-status');
+const trailStatus = getRequiredElement<HTMLElement>('#trail-status');
 const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
 const layerStructuralToggle = getRequiredElement<HTMLInputElement>('#layer-structural');
 const layerDependencyToggle = getRequiredElement<HTMLInputElement>('#layer-dependency');
@@ -743,6 +744,45 @@ const graph = cytoscape({
         'line-color': '#52796f',
         'target-arrow-shape': 'none',
         opacity: 0.22
+      }
+    },
+    {
+      selector: 'node.trail-node',
+      style: {
+        'border-width': 3,
+        'border-color': '#ffb703',
+        'overlay-color': '#ffb703',
+        'overlay-opacity': 0.08,
+        opacity: 1,
+        'text-opacity': 1
+      }
+    },
+    {
+      selector: 'node.trail-head',
+      style: {
+        'border-width': 4,
+        'border-color': '#fb5607',
+        'overlay-color': '#fb5607',
+        'overlay-opacity': 0.12
+      }
+    },
+    {
+      selector: 'edge.trail-edge',
+      style: {
+        width: 3.2,
+        opacity: 1,
+        'line-color': '#ffb703',
+        'target-arrow-color': '#ffb703',
+        'line-style': 'solid'
+      }
+    },
+    {
+      selector: 'edge.trail-head-edge',
+      style: {
+        width: 4,
+        opacity: 1,
+        'line-color': '#fb5607',
+        'target-arrow-color': '#fb5607'
       }
     }
   ]
@@ -1534,6 +1574,8 @@ function renderGraph(graphData: GraphData): void {
   drillTrailState.edgeSequence = drillTrailState.edgeSequence.filter((edgeId) => edgeCatalog.has(edgeId));
   if (drillTrailState.nodeSequence.length === 0) {
     clearDrillTrail();
+  } else {
+    updateDrillTrailStatus();
   }
 
   if (selectedNodeId && !nodeCatalog.has(selectedNodeId)) {
@@ -1686,7 +1728,7 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
 
 function applyFlowHighlighting(): void {
   graph.elements().removeClass(
-    'dimmed hidden-by-scope flow-node flow-edge flow-current flow-current-edge trail-node trail-edge node-selected node-incoming node-outgoing node-impact node-dataflow edge-incoming edge-outgoing edge-impact edge-dataflow execution-visited execution-active execution-traversed'
+    'dimmed hidden-by-scope flow-node flow-edge flow-current flow-current-edge trail-node trail-edge trail-head trail-head-edge node-selected node-incoming node-outgoing node-impact node-dataflow edge-incoming edge-outgoing edge-impact edge-dataflow execution-visited execution-active execution-traversed'
   );
 
   const activeFlow = getSelectedFlow();
@@ -2144,6 +2186,7 @@ function clearDrillTrail(): void {
   drillTrailState.enabled = false;
   drillTrailState.nodeSequence = [];
   drillTrailState.edgeSequence = [];
+  updateDrillTrailStatus();
 }
 
 function uniqueOrdered(values: string[]): string[] {
@@ -2171,6 +2214,25 @@ function getDrillTrailEdgeIds(): string[] {
     return [];
   }
   return uniqueOrdered(drillTrailState.edgeSequence);
+}
+
+function updateDrillTrailStatus(): void {
+  const trailNodeIds = getDrillTrailNodeIds();
+  if (trailNodeIds.length === 0) {
+    trailStatus.textContent = 'Chosen path: none';
+    return;
+  }
+
+  const labels = trailNodeIds.map((nodeId) => nodeCatalog.get(nodeId)?.name ?? nodeId);
+  const full = labels.join(' -> ');
+  if (full.length <= 190) {
+    trailStatus.textContent = `Chosen path (${labels.length}): ${full}`;
+    return;
+  }
+
+  const head = labels.slice(0, 3).join(' -> ');
+  const tail = labels.slice(-3).join(' -> ');
+  trailStatus.textContent = `Chosen path (${labels.length}): ${head} -> ... -> ${tail}`;
 }
 
 function resolveTrailEdgeId(sourceNodeId: string, targetNodeId: string): string | undefined {
@@ -2209,6 +2271,8 @@ function recordDrillSelection(previousNodeId: string | undefined, currentNodeId:
   if (edgeId) {
     drillTrailState.edgeSequence.push(edgeId);
   }
+
+  updateDrillTrailStatus();
 }
 
 function applyDrillTrailHighlighting(): void {
@@ -2216,12 +2280,24 @@ function applyDrillTrailHighlighting(): void {
     return;
   }
 
-  for (const nodeId of getDrillTrailNodeIds()) {
+  const trailNodeIds = getDrillTrailNodeIds();
+  for (const nodeId of trailNodeIds) {
     graph.getElementById(nodeId).addClass('trail-node').removeClass('dimmed').removeClass('hidden-by-scope');
   }
 
-  for (const edgeId of getDrillTrailEdgeIds()) {
+  const trailEdgeIds = getDrillTrailEdgeIds();
+  for (const edgeId of trailEdgeIds) {
     graph.getElementById(edgeId).addClass('trail-edge').removeClass('dimmed').removeClass('hidden-by-scope');
+  }
+
+  const tailNodeId = trailNodeIds[trailNodeIds.length - 1];
+  if (tailNodeId) {
+    graph.getElementById(tailNodeId).addClass('trail-head');
+  }
+
+  const tailEdgeId = trailEdgeIds[trailEdgeIds.length - 1];
+  if (tailEdgeId) {
+    graph.getElementById(tailEdgeId).addClass('trail-head-edge');
   }
 }
 
