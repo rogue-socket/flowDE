@@ -153,6 +153,10 @@ body {
 }
 
 .focus-control select,
+#edit-create-name,
+#edit-create-inputs,
+#edit-create-outputs,
+#edit-rename-name,
 #focus-clear-btn,
 #open-source-btn {
   appearance: none;
@@ -171,7 +175,11 @@ body {
 
 #focus-clear-btn:hover,
 #open-source-btn:hover,
-.focus-control select:hover {
+.focus-control select:hover,
+#edit-create-name:hover,
+#edit-create-inputs:hover,
+#edit-create-outputs:hover,
+#edit-rename-name:hover {
   background: var(--button-hover);
 }
 
@@ -246,6 +254,63 @@ body {
 
 .execution-node-state {
   min-height: 64px;
+}
+
+.graph-edit-panel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--panel-bg) 90%, black 4%);
+}
+
+.graph-edit-panel h3 {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted-fg);
+  font-weight: 600;
+}
+
+.graph-edit-section {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 7px;
+  background: color-mix(in srgb, var(--panel-bg) 88%, black 5%);
+}
+
+.graph-edit-section h4 {
+  margin: 0;
+  font-size: 10px;
+  color: var(--muted-fg);
+  font-weight: 600;
+}
+
+.graph-edit-section button {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--button-bg);
+  color: var(--panel-fg);
+  font-size: 10px;
+  padding: 5px 7px;
+  cursor: pointer;
+}
+
+.graph-edit-section button:hover {
+  background: var(--button-hover);
+}
+
+.graph-edit-status {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-bg) 88%, black 5%);
+  color: var(--muted-fg);
+  font-size: 10px;
+  line-height: 1.45;
+  padding: 8px;
+  white-space: pre-wrap;
 }
 
 .flow-controls {

@@ -25,6 +25,8 @@ And it keeps the text-first workflow intact by letting you click a node and jump
 - Runtime trace instrumentation with live graph highlighting
 - Step-through execution replay controls
 - Node runtime state inspection (inputs, outputs, intermediate locals)
+- Graph-native editing controls (create/connect/rename/move)
+- Bi-directional graph-code sync via direct code edits + file watcher refresh
 
 ## Architecture
 
@@ -75,6 +77,14 @@ Execution mapping strategy:
 - Python runtime tracer emits structured events (call/line/return/exception)
 - Extension maps runtime events to static graph nodes by workspace-relative file + symbol + line heuristics
 - Webview stores traces for replay and overlays execution traversal on the graph in time order
+
+Graph editing and control strategy:
+
+- Create Function via graph panel: selects module, inputs/outputs, and writes a generated Python stub
+- Connect Nodes via graph panel: inserts a function call into the selected source function body
+- Rename Node: applies identifier rename across Python files with conflict checks
+- Move Function: extracts a top-level function block and appends it to a target module
+- Conflict handling: stale mapping, duplicate definitions, invalid identifiers, and unsupported method moves are rejected with explicit error messages
 
 ### 3. Webview Frontend
 

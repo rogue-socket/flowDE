@@ -66,6 +66,7 @@ interface GraphData {
 type IncomingMessage =
   | { type: 'graphData'; payload: GraphData }
   | { type: 'graphError'; message: string }
+  | { type: 'graphEditResult'; ok: boolean; message: string }
   | { type: 'executionReset'; entryFilePath: string }
   | { type: 'executionEvent'; payload: ExecutionTraceEvent }
   | { type: 'executionComplete'; summary: { totalEvents: number; exitCode?: number; stopped?: boolean } }
@@ -157,6 +158,19 @@ const executionPlayButton = getRequiredElement<HTMLButtonElement>('#execution-pl
 const executionNextButton = getRequiredElement<HTMLButtonElement>('#execution-next-btn');
 const executionStatus = getRequiredElement<HTMLElement>('#execution-status');
 const executionNodeState = getRequiredElement<HTMLElement>('#execution-node-state');
+const editCreateModule = getRequiredElement<HTMLSelectElement>('#edit-create-module');
+const editCreateName = getRequiredElement<HTMLInputElement>('#edit-create-name');
+const editCreateInputs = getRequiredElement<HTMLInputElement>('#edit-create-inputs');
+const editCreateOutputs = getRequiredElement<HTMLInputElement>('#edit-create-outputs');
+const editCreateButton = getRequiredElement<HTMLButtonElement>('#edit-create-btn');
+const editConnectSource = getRequiredElement<HTMLSelectElement>('#edit-connect-source');
+const editConnectTarget = getRequiredElement<HTMLSelectElement>('#edit-connect-target');
+const editConnectButton = getRequiredElement<HTMLButtonElement>('#edit-connect-btn');
+const editRenameName = getRequiredElement<HTMLInputElement>('#edit-rename-name');
+const editRenameButton = getRequiredElement<HTMLButtonElement>('#edit-rename-btn');
+const editMoveModule = getRequiredElement<HTMLSelectElement>('#edit-move-module');
+const editMoveButton = getRequiredElement<HTMLButtonElement>('#edit-move-btn');
+const graphEditStatus = getRequiredElement<HTMLElement>('#graph-edit-status');
 const nodeInspector = getRequiredElement<HTMLElement>('#node-inspector');
 const openSourceButton = getRequiredElement<HTMLButtonElement>('#open-source-btn');
 const flowMinLength = getRequiredElement<HTMLSelectElement>('#flow-min-length');
@@ -497,6 +511,16 @@ graph.on('tap', 'node', (event: cytoscape.EventObject) => {
   const node = event.target;
   const nodeId = node.id();
   selectedNodeId = nodeId;
+  const selectedNode = nodeCatalog.get(nodeId);
+  if (selectedNode) {
+    editRenameName.value = selectedNode.name;
+    if (selectedNode.type === 'function') {
+      editConnectSource.value = selectedNode.id;
+      graphEditStatus.textContent = `Selected function ${selectedNode.name} for editing.`;
+    } else {
+      graphEditStatus.textContent = `Selected ${selectedNode.type} ${selectedNode.name}.`;
+    }
+  }
 
   const activeFlow = getSelectedFlow();
   if (activeFlow) {
@@ -707,6 +731,87 @@ executionPlayButton.addEventListener('click', () => {
   startExecutionPlayback();
 });
 
+editCreateButton.addEventListener('click', () => {
+  const moduleNodeId = editCreateModule.value;
+  const functionName = editCreateName.value.trim();
+
+  if (!moduleNodeId || !functionName) {
+    graphEditStatus.textContent = 'Create failed: module and function name are required.';
+    return;
+  }
+
+  vscode.postMessage({
+    type: 'createGraphFunction',
+    moduleNodeId,
+    functionName,
+    inputs: parseCsvValues(editCreateInputs.value),
+    outputs: parseCsvValues(editCreateOutputs.value)
+  });
+  graphEditStatus.textContent = `Creating ${functionName}...`;
+});
+
+editConnectButton.addEventListener('click', () => {
+  const sourceNodeId = editConnectSource.value;
+  const targetNodeId = editConnectTarget.value;
+
+  if (!sourceNodeId || !targetNodeId) {
+    graphEditStatus.textContent = 'Connect failed: source and target functions are required.';
+    return;
+  }
+
+  if (sourceNodeId === targetNodeId) {
+    graphEditStatus.textContent = 'Connect failed: source and target must be different nodes.';
+    return;
+  }
+
+  vscode.postMessage({
+    type: 'connectGraphNodes',
+    sourceNodeId,
+    targetNodeId
+  });
+  graphEditStatus.textContent = 'Generating call edge in code...';
+});
+
+editRenameButton.addEventListener('click', () => {
+  const newName = editRenameName.value.trim();
+  if (!selectedNodeId) {
+    graphEditStatus.textContent = 'Rename failed: select a node in the graph first.';
+    return;
+  }
+
+  if (!newName) {
+    graphEditStatus.textContent = 'Rename failed: enter a new node name.';
+    return;
+  }
+
+  vscode.postMessage({
+    type: 'renameGraphNode',
+    nodeId: selectedNodeId,
+    newName
+  });
+  graphEditStatus.textContent = `Renaming selected node to ${newName}...`;
+});
+
+editMoveButton.addEventListener('click', () => {
+  const targetModuleNodeId = editMoveModule.value;
+  if (!selectedNodeId) {
+    graphEditStatus.textContent = 'Move failed: select a function node first.';
+    return;
+  }
+
+  if (!targetModuleNodeId) {
+    graphEditStatus.textContent = 'Move failed: choose a target module.';
+    return;
+  }
+
+  vscode.postMessage({
+    type: 'moveGraphNode',
+    nodeId: selectedNodeId,
+    targetModuleNodeId
+  });
+  graphEditStatus.textContent = 'Moving selected function to target module...';
+});
+
 collapseFunctionsToggle.addEventListener('change', () => {
   reductionState.collapseInternalFunctions = collapseFunctionsToggle.checked;
   if (!reductionState.collapseInternalFunctions) {
@@ -805,6 +910,17 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
     return;
   }
 
+  if (message.type === 'graphEditResult') {
+    graphEditStatus.textContent = message.ok ? `Success: ${message.message}` : `Error: ${message.message}`;
+    if (message.ok) {
+      editCreateName.value = '';
+      editCreateInputs.value = '';
+      editCreateOutputs.value = '';
+      editRenameName.value = '';
+    }
+    return;
+  }
+
   if (message.type === 'executionReset') {
     resetExecutionTrace(message.entryFilePath);
     return;
@@ -876,6 +992,7 @@ function renderGraph(graphData: GraphData): void {
 
   syncFocusFileOptions(graphData);
   syncModuleFilterOptions(graphData);
+  syncGraphEditOptions(graphData);
 
   const elements = [
     ...displayedGraphData.nodes.map((node) => ({
@@ -1575,6 +1692,67 @@ function syncFocusFileOptions(graphData: GraphData): void {
   const resolvedValue = options.some((option) => option.value === previousValue) ? previousValue : 'all';
   focusFile.value = resolvedValue;
   focusFilters.moduleNodeId = resolvedValue;
+}
+
+function syncGraphEditOptions(graphData: GraphData): void {
+  const previousCreateModule = editCreateModule.value;
+  const previousMoveModule = editMoveModule.value;
+  const previousConnectSource = editConnectSource.value;
+  const previousConnectTarget = editConnectTarget.value;
+
+  const moduleOptions = graphData.nodes
+    .filter((node) => node.type === 'module' && !node.metadata?.external)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const functionOptions = graphData.nodes
+    .filter((node) => node.type === 'function')
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  applySelectOptions(
+    editCreateModule,
+    [{ value: '', label: 'Select module' }, ...moduleOptions.map((node) => ({ value: node.id, label: node.name }))],
+    previousCreateModule
+  );
+  applySelectOptions(
+    editMoveModule,
+    [{ value: '', label: 'Select module' }, ...moduleOptions.map((node) => ({ value: node.id, label: node.name }))],
+    previousMoveModule
+  );
+  applySelectOptions(
+    editConnectSource,
+    [{ value: '', label: 'Select source' }, ...functionOptions.map((node) => ({ value: node.id, label: node.name }))],
+    previousConnectSource
+  );
+  applySelectOptions(
+    editConnectTarget,
+    [{ value: '', label: 'Select target' }, ...functionOptions.map((node) => ({ value: node.id, label: node.name }))],
+    previousConnectTarget
+  );
+}
+
+function applySelectOptions(
+  select: HTMLSelectElement,
+  options: Array<{ value: string; label: string }>,
+  preferredValue: string
+): void {
+  select.replaceChildren();
+  options.forEach((optionData) => {
+    const option = document.createElement('option');
+    option.value = optionData.value;
+    option.textContent = optionData.label;
+    select.appendChild(option);
+  });
+
+  const resolved = options.some((option) => option.value === preferredValue)
+    ? preferredValue
+    : options[0]?.value ?? '';
+  select.value = resolved;
+}
+
+function parseCsvValues(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
 }
 
 function applyFocusFilters(): void {
