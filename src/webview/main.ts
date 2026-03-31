@@ -4,13 +4,22 @@ declare function acquireVsCodeApi(): {
   postMessage: (message: unknown) => void;
 };
 
-type GraphNodeType = 'function' | 'variable' | 'module';
-type GraphEdgeType = 'call' | 'dependency' | 'contains';
+type GraphLayer = 'structural' | 'dependency' | 'dataflow' | 'execution';
+type GraphNodeType = 'function' | 'variable' | 'module' | 'class';
+type GraphEdgeType =
+  | 'call'
+  | 'dependency'
+  | 'contains'
+  | 'class-usage'
+  | 'dataflow'
+  | 'execution-path';
 
 interface GraphNode {
   id: string;
   type: GraphNodeType;
   name: string;
+  layers: GraphLayer[];
+  roles: string[];
   filePath?: string;
   line?: number;
   metadata?: Record<string, unknown>;
@@ -21,6 +30,7 @@ interface GraphEdge {
   source: string;
   target: string;
   type: GraphEdgeType;
+  layer: GraphLayer;
   metadata?: {
     confidence?: number;
     provenance?: string;
@@ -37,10 +47,15 @@ interface GraphData {
     generatedAt: string;
     fileCount: number;
     engineVersion: string;
+    layerStats: Record<GraphLayer, { nodes: number; edges: number; visibleByDefault: boolean }>;
     diagnostics: {
       resolvedCalls: number;
       unresolvedCalls: number;
       ambiguousCalls: number;
+      classUsageEdges: number;
+      dataFlowEdges: number;
+      indexedClasses: number;
+      indexedVariables: number;
       parserCacheHits: number;
       parserCacheMisses: number;
     };
@@ -84,6 +99,13 @@ interface ReductionState {
   librariesExpanded: boolean;
 }
 
+interface LayerVisibility {
+  structural: boolean;
+  dependency: boolean;
+  dataflow: boolean;
+  execution: boolean;
+}
+
 interface MinimapTransform {
   scale: number;
   offsetX: number;
@@ -99,6 +121,10 @@ const flowMeta = getRequiredElement<HTMLElement>('#flow-meta');
 const focusFile = getRequiredElement<HTMLSelectElement>('#focus-file');
 const focusNeighborhood = getRequiredElement<HTMLInputElement>('#focus-neighborhood');
 const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
+const layerStructuralToggle = getRequiredElement<HTMLInputElement>('#layer-structural');
+const layerDependencyToggle = getRequiredElement<HTMLInputElement>('#layer-dependency');
+const layerDataFlowToggle = getRequiredElement<HTMLInputElement>('#layer-dataflow');
+const layerExecutionToggle = getRequiredElement<HTMLInputElement>('#layer-execution');
 const collapseFunctionsToggle = getRequiredElement<HTMLInputElement>('#collapse-functions');
 const collapseLibrariesToggle = getRequiredElement<HTMLInputElement>('#collapse-libraries');
 const reductionHint = getRequiredElement<HTMLElement>('#reduction-hint');
@@ -153,6 +179,13 @@ const reductionState: ReductionState = {
   collapseLibraries: collapseLibrariesToggle.checked,
   expandedModuleIds: new Set<string>(),
   librariesExpanded: false
+};
+
+const layerVisibility: LayerVisibility = {
+  structural: layerStructuralToggle.checked,
+  dependency: layerDependencyToggle.checked,
+  dataflow: layerDataFlowToggle.checked,
+  execution: layerExecutionToggle.checked
 };
 
 const COLLAPSED_LIBRARIES_NODE_ID = 'module:external:collapsed';
@@ -265,6 +298,22 @@ const graph = cytoscape({
       }
     },
     {
+      selector: 'node[type = "class"]',
+      style: {
+        shape: 'round-hexagon',
+        'background-color': '#264653',
+        'border-color': '#8ecae6'
+      }
+    },
+    {
+      selector: 'node[type = "variable"]',
+      style: {
+        shape: 'rectangle',
+        'background-color': '#606c38',
+        'border-color': '#ccd5ae'
+      }
+    },
+    {
       selector: 'node[external = 1]',
       style: {
         'background-color': '#6c757d',
@@ -338,6 +387,33 @@ const graph = cytoscape({
         'line-style': 'dashed',
         'line-color': '#84a59d',
         'target-arrow-color': '#84a59d'
+      }
+    },
+    {
+      selector: 'edge[type = "class-usage"]',
+      style: {
+        width: 1.8,
+        'line-style': 'dotted',
+        'line-color': '#5dade2',
+        'target-arrow-color': '#5dade2'
+      }
+    },
+    {
+      selector: 'edge[type = "dataflow"]',
+      style: {
+        width: 1.8,
+        'line-style': 'solid',
+        'line-color': '#90be6d',
+        'target-arrow-color': '#90be6d'
+      }
+    },
+    {
+      selector: 'edge[type = "execution-path"]',
+      style: {
+        width: 2.2,
+        'line-style': 'dashed',
+        'line-color': '#f94144',
+        'target-arrow-color': '#f94144'
       }
     },
     {
@@ -516,6 +592,26 @@ focusClearButton.addEventListener('click', () => {
   applyFlowHighlighting();
 });
 
+layerStructuralToggle.addEventListener('change', () => {
+  layerVisibility.structural = layerStructuralToggle.checked;
+  rerenderGraphFromSource();
+});
+
+layerDependencyToggle.addEventListener('change', () => {
+  layerVisibility.dependency = layerDependencyToggle.checked;
+  rerenderGraphFromSource();
+});
+
+layerDataFlowToggle.addEventListener('change', () => {
+  layerVisibility.dataflow = layerDataFlowToggle.checked;
+  rerenderGraphFromSource();
+});
+
+layerExecutionToggle.addEventListener('change', () => {
+  layerVisibility.execution = layerExecutionToggle.checked;
+  rerenderGraphFromSource();
+});
+
 collapseFunctionsToggle.addEventListener('change', () => {
   reductionState.collapseInternalFunctions = collapseFunctionsToggle.checked;
   if (!reductionState.collapseInternalFunctions) {
@@ -616,6 +712,10 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
 
 updateZoomResetLabel();
 focusNeighborhood.checked = focusFilters.neighborhoodOnly;
+layerStructuralToggle.checked = layerVisibility.structural;
+layerDependencyToggle.checked = layerVisibility.dependency;
+layerDataFlowToggle.checked = layerVisibility.dataflow;
+layerExecutionToggle.checked = layerVisibility.execution;
 collapseFunctionsToggle.checked = reductionState.collapseInternalFunctions;
 collapseLibrariesToggle.checked = reductionState.collapseLibraries;
 updateReductionHint();
@@ -694,6 +794,16 @@ function renderGraph(graphData: GraphData): void {
     totalCalls > 0
       ? ` | calls: ${diagnostics.resolvedCalls}/${totalCalls} resolved`
       : ' | calls: none';
+  const modelSuffix = ` | classes: ${diagnostics.indexedClasses} | vars: ${diagnostics.indexedVariables} | dataflow: ${diagnostics.dataFlowEdges}`;
+  const activeLayers = [
+    layerVisibility.structural ? 'S' : '',
+    layerVisibility.dependency ? 'D' : '',
+    layerVisibility.dataflow ? 'F' : '',
+    layerVisibility.execution ? 'X' : ''
+  ]
+    .filter((token) => token.length > 0)
+    .join('');
+  const layerSuffix = ` | layers: ${activeLayers || 'none'}`;
   const cacheTotal = diagnostics.parserCacheHits + diagnostics.parserCacheMisses;
   const cacheSuffix =
     cacheTotal > 0
@@ -701,7 +811,7 @@ function renderGraph(graphData: GraphData): void {
       : '';
   const warningCompact = graphData.meta.parseWarnings.length > 0 ? ' | warnings' : '';
 
-  statusText.textContent = `${graphData.meta.workspaceName} | ${displayedGraphData.nodes.length} nodes | ${displayedGraphData.edges.length} edges${relationSuffix}${cacheSuffix}${warningCompact}`;
+  statusText.textContent = `${graphData.meta.workspaceName} | ${displayedGraphData.nodes.length} nodes | ${displayedGraphData.edges.length} edges${relationSuffix}${modelSuffix}${layerSuffix}${cacheSuffix}${warningCompact}`;
 }
 
 function renderFlowSidebar(): void {
@@ -1072,9 +1182,10 @@ function toggleReductionExpansion(nodeId: string): boolean {
 }
 
 function buildDisplayedGraphData(source: GraphData): GraphData {
-  const sourceNodesById = new Map(source.nodes.map((node) => [node.id, node]));
-  const functionNodes = source.nodes.filter((node) => node.type === 'function');
-  const moduleNodes = source.nodes.filter((node) => node.type === 'module');
+  const layerFiltered = buildLayerFilteredGraphData(source);
+  const sourceNodesById = new Map(layerFiltered.nodes.map((node) => [node.id, node]));
+  const functionNodes = layerFiltered.nodes.filter((node) => node.type === 'function');
+  const moduleNodes = layerFiltered.nodes.filter((node) => node.type === 'module');
   const externalModuleIds = new Set(
     moduleNodes.filter((node) => node.metadata?.external).map((node) => node.id)
   );
@@ -1109,7 +1220,7 @@ function buildDisplayedGraphData(source: GraphData): GraphData {
 
   const visibleNodes: GraphNode[] = [];
 
-  for (const node of source.nodes) {
+  for (const node of layerFiltered.nodes) {
     if (hiddenFunctionIds.has(node.id)) {
       continue;
     }
@@ -1135,7 +1246,7 @@ function buildDisplayedGraphData(source: GraphData): GraphData {
   const aggregatedLibraryDeps = new Map<string, number>();
   const visibleEdges: GraphEdge[] = [];
 
-  for (const edge of source.edges) {
+  for (const edge of layerFiltered.edges) {
     const sourceHiddenFunction = hiddenFunctionIds.has(edge.source);
     const targetHiddenFunction = hiddenFunctionIds.has(edge.target);
     const sourceHiddenExternal = hiddenExternalModuleIds.has(edge.source);
@@ -1181,6 +1292,7 @@ function buildDisplayedGraphData(source: GraphData): GraphData {
       source: sourceId,
       target: targetId,
       type: 'call',
+      layer: 'dependency',
       metadata: {
         reduced: true,
         collapsedCallCount: count,
@@ -1199,6 +1311,8 @@ function buildDisplayedGraphData(source: GraphData): GraphData {
         id: COLLAPSED_LIBRARIES_NODE_ID,
         type: 'module',
         name: 'Libraries',
+        layers: ['structural', 'dependency'],
+        roles: ['container', 'external'],
         metadata: {
           external: true,
           reduced: true,
@@ -1213,6 +1327,7 @@ function buildDisplayedGraphData(source: GraphData): GraphData {
           source: sourceId,
           target: COLLAPSED_LIBRARIES_NODE_ID,
           type: 'dependency',
+          layer: 'dependency',
           metadata: {
             reduced: true,
             collapsedDependencyCount: count,
@@ -1229,6 +1344,39 @@ function buildDisplayedGraphData(source: GraphData): GraphData {
     ...source,
     nodes: visibleNodes,
     edges: visibleEdges
+  };
+}
+
+function buildLayerFilteredGraphData(source: GraphData): GraphData {
+  const visibleLayers = new Set<GraphLayer>();
+  if (layerVisibility.structural) {
+    visibleLayers.add('structural');
+  }
+  if (layerVisibility.dependency) {
+    visibleLayers.add('dependency');
+  }
+  if (layerVisibility.dataflow) {
+    visibleLayers.add('dataflow');
+  }
+  if (layerVisibility.execution) {
+    visibleLayers.add('execution');
+  }
+
+  const edges = source.edges.filter((edge) => visibleLayers.has(edge.layer));
+  const connectedNodeIds = new Set<string>();
+  for (const edge of edges) {
+    connectedNodeIds.add(edge.source);
+    connectedNodeIds.add(edge.target);
+  }
+
+  const nodes = source.nodes.filter(
+    (node) => node.layers.some((layer) => visibleLayers.has(layer)) || connectedNodeIds.has(node.id)
+  );
+
+  return {
+    ...source,
+    nodes,
+    edges
   };
 }
 
@@ -1715,9 +1863,22 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
     });
 
   const functionsByModuleId = new Map<string, GraphNode[]>();
+  const classesByModuleId = new Map<string, GraphNode[]>();
   const unscopedFunctions: GraphNode[] = [];
 
   for (const node of graphData.nodes) {
+    if (node.type === 'class') {
+      const moduleNodeId = getModuleNodeId(node);
+      if (!moduleNodeId) {
+        continue;
+      }
+
+      const scoped = classesByModuleId.get(moduleNodeId) ?? [];
+      scoped.push(node);
+      classesByModuleId.set(moduleNodeId, scoped);
+      continue;
+    }
+
     if (node.type !== 'function') {
       continue;
     }
@@ -1731,6 +1892,22 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
     const scoped = functionsByModuleId.get(moduleNodeId) ?? [];
     scoped.push(node);
     functionsByModuleId.set(moduleNodeId, scoped);
+  }
+
+  for (const [moduleId, classes] of classesByModuleId.entries()) {
+    const center = positions.get(moduleId) ?? { x: 0, y: 0 };
+    const sortedClasses = [...classes].sort((a, b) => a.name.localeCompare(b.name));
+
+    sortedClasses.forEach((classNode, index) => {
+      const items = Math.max(sortedClasses.length, 1);
+      const angle = (2 * Math.PI * index) / items - Math.PI / 2;
+      const radius = 96;
+
+      positions.set(classNode.id, {
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      });
+    });
   }
 
   for (const [moduleId, functions] of functionsByModuleId.entries()) {
@@ -1762,6 +1939,39 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
       });
     });
 
+  const variableNodes = graphData.nodes
+    .filter((node) => node.type === 'variable')
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const variableAnchorCounts = new Map<string, number>();
+
+  for (const variableNode of variableNodes) {
+    const functionNodeId = getFunctionNodeId(variableNode);
+    const moduleNodeId = getModuleNodeId(variableNode);
+    const anchorId = functionNodeId ?? moduleNodeId;
+    if (!anchorId) {
+      continue;
+    }
+
+    const anchor = positions.get(anchorId);
+    if (!anchor) {
+      continue;
+    }
+
+    const index = variableAnchorCounts.get(anchorId) ?? 0;
+    variableAnchorCounts.set(anchorId, index + 1);
+
+    const perRing = 8;
+    const ring = Math.floor(index / perRing);
+    const indexInRing = index % perRing;
+    const angle = (2 * Math.PI * indexInRing) / perRing - Math.PI / 2;
+    const radius = 44 + ring * 24;
+
+    positions.set(variableNode.id, {
+      x: anchor.x + radius * Math.cos(angle),
+      y: anchor.y + radius * Math.sin(angle)
+    });
+  }
+
   return positions;
 }
 
@@ -1786,6 +1996,11 @@ function formatNodeLabel(node: GraphNode): string {
 
 function getModuleNodeId(node: GraphNode): string | undefined {
   const rawValue = node.metadata?.moduleNodeId;
+  return typeof rawValue === 'string' ? rawValue : undefined;
+}
+
+function getFunctionNodeId(node: GraphNode): string | undefined {
+  const rawValue = node.metadata?.functionNodeId;
   return typeof rawValue === 'string' ? rawValue : undefined;
 }
 

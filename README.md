@@ -1,23 +1,27 @@
 # FlowDE
 
-FlowDE is a VS Code extension MVP that adds a graph-based cognition layer for Python codebases.
+FlowDE is a VS Code extension that adds a graph-native cognition layer for Python codebases.
 
-It visualizes:
+It now visualizes:
 
 - Functions as nodes
+- Classes as nodes
+- Variables as nodes
 - Modules as nodes
-- Function calls, module dependencies, and module containment as edges
+- Structural, dependency, and data-flow relations as distinct edge layers
 
 And it keeps the text-first workflow intact by letting you click a node and jump directly to the exact source line.
 
-## MVP Capabilities
+## Phase 2 Capabilities
 
 - Command: `FlowDE: Open Graph View`
 - Dedicated graph panel in VS Code webview
 - Python workspace parsing (`*.py` files)
 - Graph rendering with zoom and pan
+- Layer controls for Structural, Dependency, Data Flow, and Execution (future-ready)
 - Node click navigation to code (file + line)
 - Live refresh support (manual and on Python file changes)
+- Smart reduction + expand-on-demand for dense graphs
 
 ## Architecture
 
@@ -44,11 +48,24 @@ Locations:
 
 Pipeline:
 
-1. Indexer: parses Python files into module/function/import/call artifacts
+1. Indexer: parses Python files into module/class/function/variable/import/call/data-flow artifacts
 2. Resolver: resolves cross-file relations with confidence + provenance
-3. Builder: assembles graph nodes/edges and meta diagnostics
+3. Builder: assembles layered graph nodes/edges and meta diagnostics
+
+Graph layers:
+
+- Structural layer: containment and declaration topology
+- Dependency layer: calls, imports, class usage
+- Data flow layer: variable movement and transformation paths
+- Execution layer: reserved contract for runtime traces and path replay
 
 Graph schema: `src/graph/schema.ts`
+
+Core model guarantees:
+
+- Nodes can have multiple roles (`container`, `callable`, `type`, `state`, `transform`, `external`)
+- Every edge has an explicit layer and type
+- Graph metadata reports per-layer stats and resolution diagnostics
 
 ### 3. Webview Frontend
 
@@ -155,4 +172,4 @@ Python is dynamic, so the semantic engine prioritizes traceable confidence over 
 - Indexer uses incremental cache (file mtime + size) for faster refreshes
 - Parser failures degrade gracefully into partial module graphs with warnings
 
-This keeps graph evolution measurable while enabling future LSP/runtime enrichment.
+This keeps graph evolution measurable while enabling future LSP/runtime trace enrichment.

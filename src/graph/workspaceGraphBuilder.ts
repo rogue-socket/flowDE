@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { GraphData } from './schema';
+import { GraphData, GraphLayer } from './schema';
 import { PythonRelationResolver } from './pythonRelationResolver';
 import { PythonWorkspaceIndexer } from './pythonWorkspaceIndexer';
 import { WorkspaceGraphCache } from './workspaceGraphCache';
@@ -12,6 +12,7 @@ export class PythonWorkspaceGraphBuilder {
   public async buildGraph(workspaceFolder: vscode.WorkspaceFolder): Promise<GraphData> {
     const indexing = await this.indexer.indexWorkspace(workspaceFolder);
     const resolution = this.resolver.resolve(indexing.modules);
+    const layerStats = this.computeLayerStats(resolution.nodes, resolution.edges);
 
     return {
       nodes: resolution.nodes,
@@ -20,16 +21,45 @@ export class PythonWorkspaceGraphBuilder {
         workspaceName: workspaceFolder.name,
         generatedAt: new Date().toISOString(),
         fileCount: indexing.fileCount,
-        engineVersion: '0.2.0-semantic-pipeline',
+        engineVersion: '0.3.0-graph-layers',
+        layerStats,
         diagnostics: {
           resolvedCalls: resolution.diagnostics.resolvedCalls,
           unresolvedCalls: resolution.diagnostics.unresolvedCalls,
           ambiguousCalls: resolution.diagnostics.ambiguousCalls,
+          classUsageEdges: resolution.diagnostics.classUsageEdges,
+          dataFlowEdges: resolution.diagnostics.dataFlowEdges,
+          indexedClasses: resolution.diagnostics.indexedClasses,
+          indexedVariables: resolution.diagnostics.indexedVariables,
           parserCacheHits: indexing.stats.cacheHits,
           parserCacheMisses: indexing.stats.cacheMisses
         },
         parseWarnings: indexing.stats.parseWarnings
       }
     };
+  }
+
+  private computeLayerStats(
+    nodes: GraphData['nodes'],
+    edges: GraphData['edges']
+  ): Record<GraphLayer, GraphData['meta']['layerStats'][GraphLayer]> {
+    const result: Record<GraphLayer, GraphData['meta']['layerStats'][GraphLayer]> = {
+      structural: { nodes: 0, edges: 0, visibleByDefault: true },
+      dependency: { nodes: 0, edges: 0, visibleByDefault: true },
+      dataflow: { nodes: 0, edges: 0, visibleByDefault: true },
+      execution: { nodes: 0, edges: 0, visibleByDefault: false }
+    };
+
+    for (const node of nodes) {
+      for (const layer of node.layers) {
+        result[layer].nodes += 1;
+      }
+    }
+
+    for (const edge of edges) {
+      result[edge.layer].edges += 1;
+    }
+
+    return result;
   }
 }

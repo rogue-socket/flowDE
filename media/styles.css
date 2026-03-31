@@ -116,7 +116,8 @@ body {
 
 .focus-panel,
 .node-inspector-panel,
-.reduction-panel {
+.reduction-panel,
+.layer-panel {
   display: grid;
   gap: 7px;
   border: 1px solid var(--panel-border);
@@ -127,7 +128,8 @@ body {
 
 .focus-panel h3,
 .node-inspector-panel h3,
-.reduction-panel h3 {
+.reduction-panel h3,
+.layer-panel h3 {
   margin: 0;
   font-size: 11px;
   color: var(--muted-fg);
@@ -472,6 +474,18 @@ body {
   border-color: #cfe1b9;
 }
 
+.legend-dot.class {
+  border-radius: 4px;
+  background: #264653;
+  border-color: #8ecae6;
+}
+
+.legend-dot.variable {
+  border-radius: 2px;
+  background: #606c38;
+  border-color: #ccd5ae;
+}
+
 .legend-dot.external {
   border-radius: 50%;
   background: #6c757d;
@@ -490,6 +504,10 @@ body {
 .legend-edge.dependency {
   border-top-color: #84a59d;
   border-top-style: dashed;
+}
+
+.legend-edge.dataflow {
+  border-top-color: #90be6d;
 }
 
 @media (max-width: 900px) {

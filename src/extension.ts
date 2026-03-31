@@ -240,6 +240,25 @@ class FlowDEPanel implements vscode.Disposable {
             </label>
             <button id="focus-clear-btn" type="button">Clear focus</button>
           </div>
+          <div class="layer-panel" aria-label="Graph layer controls">
+            <h3>Graph Layers</h3>
+            <label class="focus-toggle">
+              <input id="layer-structural" type="checkbox" checked />
+              <span>Structural</span>
+            </label>
+            <label class="focus-toggle">
+              <input id="layer-dependency" type="checkbox" checked />
+              <span>Dependency</span>
+            </label>
+            <label class="focus-toggle">
+              <input id="layer-dataflow" type="checkbox" checked />
+              <span>Data Flow</span>
+            </label>
+            <label class="focus-toggle">
+              <input id="layer-execution" type="checkbox" />
+              <span>Execution</span>
+            </label>
+          </div>
           <div class="reduction-panel" aria-label="Smart graph reduction">
             <h3>Smart Reduction</h3>
             <label class="focus-toggle">
@@ -308,10 +327,13 @@ class FlowDEPanel implements vscode.Disposable {
           </aside>
           <div class="legend-inline" aria-label="Graph legend">
             <span class="legend-item"><span class="legend-dot module"></span>Module</span>
+            <span class="legend-item"><span class="legend-dot class"></span>Class</span>
             <span class="legend-item"><span class="legend-dot function"></span>Function</span>
+            <span class="legend-item"><span class="legend-dot variable"></span>Variable</span>
             <span class="legend-item"><span class="legend-dot external"></span>External</span>
             <span class="legend-item"><span class="legend-edge call"></span>Call</span>
             <span class="legend-item"><span class="legend-edge dependency"></span>Dependency</span>
+            <span class="legend-item"><span class="legend-edge dataflow"></span>Data Flow</span>
           </div>
         </section>
       </main>

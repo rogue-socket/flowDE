@@ -3,15 +3,53 @@ import { parser } from '@lezer/python';
 import { SyntaxNode } from '@lezer/common';
 import { GraphNode } from './schema';
 import {
+  IndexedClassSymbol,
   ImportBinding,
   IndexedCallReference,
+  IndexedDataFlowReference,
   IndexedFunctionSymbol,
   IndexedModule,
+  IndexedVariableSymbol,
   IndexingResult
 } from './semanticTypes';
 import { WorkspaceGraphCache } from './workspaceGraphCache';
 
 const PYTHON_EXCLUDE_GLOB = '**/{.git,node_modules,.venv,venv,__pycache__,dist}/**';
+const PYTHON_IDENTIFIERS_TO_SKIP = new Set([
+  'and',
+  'as',
+  'assert',
+  'break',
+  'class',
+  'continue',
+  'def',
+  'del',
+  'elif',
+  'else',
+  'except',
+  'false',
+  'finally',
+  'for',
+  'from',
+  'global',
+  'if',
+  'import',
+  'in',
+  'is',
+  'lambda',
+  'none',
+  'nonlocal',
+  'not',
+  'or',
+  'pass',
+  'raise',
+  'return',
+  'true',
+  'try',
+  'while',
+  'with',
+  'yield'
+]);
 
 export class PythonWorkspaceIndexer {
   constructor(private readonly cache: WorkspaceGraphCache) {}
@@ -84,19 +122,24 @@ export class PythonWorkspaceIndexer {
       id: moduleNodeId,
       type: 'module',
       name: moduleName,
+      layers: ['structural', 'dependency', 'dataflow'],
+      roles: ['container'],
       filePath: relativePath,
       line: 1
     };
 
     const importArtifacts = this.extractImportArtifacts(source, moduleName, relativePath);
-    const parseArtifacts = this.collectFunctionsAndCalls(source, relativePath, moduleNodeId, moduleName);
+    const parseArtifacts = this.collectSymbolsAndRelations(source, relativePath, moduleNodeId, moduleName);
 
     return {
       relativePath,
       moduleName,
       moduleNode,
+      classes: parseArtifacts.classes,
       functions: parseArtifacts.functions,
+      variables: parseArtifacts.variables,
       callRefs: parseArtifacts.callRefs,
+      dataFlowRefs: parseArtifacts.dataFlowRefs,
       dependencies: importArtifacts.dependencies,
       importBindings: importArtifacts.importBindings,
       warning: parseArtifacts.warning
@@ -112,31 +155,97 @@ export class PythonWorkspaceIndexer {
         id: `module:${relativePath}`,
         type: 'module',
         name: moduleName,
+        layers: ['structural', 'dependency', 'dataflow'],
+        roles: ['container'],
         filePath: relativePath,
         line: 1
       },
+      classes: [],
       functions: [],
+      variables: [],
       callRefs: [],
+      dataFlowRefs: [],
       dependencies: [],
       importBindings: []
     };
   }
 
-  private collectFunctionsAndCalls(
+  private collectSymbolsAndRelations(
     source: string,
     relativePath: string,
     moduleNodeId: string,
     moduleName: string
-  ): { functions: IndexedFunctionSymbol[]; callRefs: IndexedCallReference[]; warning?: string } {
+  ): {
+    classes: IndexedClassSymbol[];
+    functions: IndexedFunctionSymbol[];
+    variables: IndexedVariableSymbol[];
+    callRefs: IndexedCallReference[];
+    dataFlowRefs: IndexedDataFlowReference[];
+    warning?: string;
+  } {
+    const classes: IndexedClassSymbol[] = [];
     const functions: IndexedFunctionSymbol[] = [];
+    const variables: IndexedVariableSymbol[] = [];
     const callRefs: IndexedCallReference[] = [];
+    const dataFlowRefs: IndexedDataFlowReference[] = [];
+    const variableByScopeAndName = new Map<string, IndexedVariableSymbol>();
+
+    const ensureScopedVariable = (
+      name: string,
+      line: number,
+      functionNodeId?: string
+    ): IndexedVariableSymbol => {
+      const scopeKey = `${functionNodeId ?? moduleNodeId}::${name}`;
+      const existing = variableByScopeAndName.get(scopeKey);
+      if (existing) {
+        return existing;
+      }
+
+      const symbol: IndexedVariableSymbol = {
+        id: `variable:${relativePath}:${functionNodeId ?? 'module'}:${name}`,
+        name,
+        filePath: relativePath,
+        line,
+        moduleNodeId,
+        moduleName,
+        functionNodeId
+      };
+
+      variableByScopeAndName.set(scopeKey, symbol);
+      variables.push(symbol);
+      return symbol;
+    };
 
     try {
       const tree = parser.parse(source);
       const lineMap = this.buildLineStartMap(source);
 
-      const walk = (node: SyntaxNode, activeFunctionId?: string): void => {
+      const walk = (
+        node: SyntaxNode,
+        activeFunctionId?: string,
+        activeClass?: IndexedClassSymbol
+      ): void => {
         let currentFunctionId = activeFunctionId;
+        let currentClass = activeClass;
+
+        if (node.type.name === 'ClassDefinition') {
+          const classNameNode = this.findFirstChildByType(node, 'VariableName');
+          if (classNameNode) {
+            const className = source.slice(classNameNode.from, classNameNode.to);
+            const line = this.positionToLine(lineMap, classNameNode.from);
+            const classId = `class:${relativePath}:${className}:${line}`;
+
+            currentClass = {
+              id: classId,
+              name: className,
+              filePath: relativePath,
+              line,
+              moduleNodeId,
+              moduleName
+            };
+            classes.push(currentClass);
+          }
+        }
 
         if (node.type.name === 'FunctionDefinition') {
           const nameNode = this.findFirstChildByType(node, 'VariableName');
@@ -151,10 +260,22 @@ export class PythonWorkspaceIndexer {
               filePath: relativePath,
               line,
               moduleNodeId,
-              moduleName
+              moduleName,
+              classNodeId: currentClass?.id,
+              className: currentClass?.name
             });
 
             currentFunctionId = functionId;
+
+            for (const parameterName of this.extractFunctionParameterNames(node, source)) {
+              const parameterVar = ensureScopedVariable(parameterName, line, functionId);
+              dataFlowRefs.push({
+                sourceNodeId: parameterVar.id,
+                targetNodeId: functionId,
+                variableName: parameterName,
+                reason: 'function-parameter'
+              });
+            }
           }
         }
 
@@ -171,22 +292,138 @@ export class PythonWorkspaceIndexer {
           }
         }
 
+        const isAssignmentNode = /Assign|Assignment/.test(node.type.name);
+        if (isAssignmentNode && currentFunctionId) {
+          const assignmentText = source.slice(node.from, node.to);
+          const parsedAssignment = this.extractAssignmentExpression(assignmentText);
+
+          if (parsedAssignment) {
+            const line = this.positionToLine(lineMap, node.from);
+            const sourceVariables = this.extractIdentifierNames(parsedAssignment.right)
+              .map((name) => ensureScopedVariable(name, line, currentFunctionId));
+
+            for (const targetName of parsedAssignment.left) {
+              const targetVariable = ensureScopedVariable(targetName, line, currentFunctionId);
+
+              if (sourceVariables.length === 0) {
+                dataFlowRefs.push({
+                  sourceNodeId: currentFunctionId,
+                  targetNodeId: targetVariable.id,
+                  variableName: targetName,
+                  reason: 'literal-assignment'
+                });
+                continue;
+              }
+
+              for (const sourceVariable of sourceVariables) {
+                dataFlowRefs.push({
+                  sourceNodeId: sourceVariable.id,
+                  targetNodeId: targetVariable.id,
+                  variableName: targetName,
+                  reason: 'assignment'
+                });
+              }
+            }
+          }
+        }
+
+        if (node.type.name === 'ReturnStatement' && currentFunctionId) {
+          const returnText = source.slice(node.from, node.to).replace(/^\s*return\s+/, '');
+          const line = this.positionToLine(lineMap, node.from);
+
+          for (const identifier of this.extractIdentifierNames(returnText)) {
+            const sourceVariable = ensureScopedVariable(identifier, line, currentFunctionId);
+            dataFlowRefs.push({
+              sourceNodeId: sourceVariable.id,
+              targetNodeId: currentFunctionId,
+              variableName: identifier,
+              reason: 'return-flow'
+            });
+          }
+        }
+
         for (let child = node.firstChild; child; child = child.nextSibling) {
-          walk(child, currentFunctionId);
+          walk(child, currentFunctionId, currentClass);
         }
       };
 
       walk(tree.topNode);
 
-      return { functions, callRefs };
+      return { classes, functions, variables, callRefs, dataFlowRefs };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       return {
+        classes,
         functions,
+        variables,
         callRefs,
+        dataFlowRefs,
         warning: `Parser fallback on ${relativePath}: ${errorMessage}`
       };
     }
+  }
+
+  private extractFunctionParameterNames(node: SyntaxNode, source: string): string[] {
+    const paramListNode = this.findFirstChildByType(node, 'ParamList');
+    if (!paramListNode) {
+      return [];
+    }
+
+    const rawParamText = source.slice(paramListNode.from, paramListNode.to).trim();
+    const body = rawParamText.startsWith('(') && rawParamText.endsWith(')')
+      ? rawParamText.slice(1, -1)
+      : rawParamText;
+
+    return body
+      .split(',')
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0)
+      .map((segment) => {
+        const withoutDefault = segment.split('=')[0]?.trim() ?? segment;
+        const withoutAnnotation = withoutDefault.split(':')[0]?.trim() ?? withoutDefault;
+        return withoutAnnotation.replace(/^\*+/, '').trim();
+      })
+      .filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+      .filter((name) => !PYTHON_IDENTIFIERS_TO_SKIP.has(name.toLowerCase()));
+  }
+
+  private extractAssignmentExpression(
+    statement: string
+  ): { left: string[]; right: string } | undefined {
+    const match = statement.match(/^\s*([A-Za-z_][A-Za-z0-9_\s,]*)\s*=\s*(.+)$/s);
+    if (!match) {
+      return undefined;
+    }
+
+    const left = match[1]
+      .split(',')
+      .map((segment) => segment.trim())
+      .filter((segment) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(segment));
+
+    if (left.length === 0) {
+      return undefined;
+    }
+
+    return {
+      left,
+      right: match[2].trim()
+    };
+  }
+
+  private extractIdentifierNames(expression: string): string[] {
+    const matches = expression.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+    const unique = new Set<string>();
+
+    for (const match of matches) {
+      const lowered = match.toLowerCase();
+      if (PYTHON_IDENTIFIERS_TO_SKIP.has(lowered)) {
+        continue;
+      }
+
+      unique.add(match);
+    }
+
+    return [...unique];
   }
 
   private extractImportArtifacts(

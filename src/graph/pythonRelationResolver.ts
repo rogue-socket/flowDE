@@ -2,8 +2,10 @@ import { GraphEdge, GraphNode } from './schema';
 import {
   ImportBinding,
   IndexedCallReference,
+  IndexedClassSymbol,
   IndexedFunctionSymbol,
   IndexedModule,
+  IndexedVariableSymbol,
   ResolutionResult
 } from './semanticTypes';
 
@@ -29,8 +31,16 @@ export class PythonRelationResolver {
     const dependencyRecords: Array<{ sourceModuleId: string; dependency: string }> = [];
     const externalModuleNodes = new Map<string, GraphNode>();
 
+    const classSymbols: IndexedClassSymbol[] = [];
     const functionSymbols: IndexedFunctionSymbol[] = [];
+    const variableSymbols: IndexedVariableSymbol[] = [];
     const callRefs: IndexedCallReference[] = [];
+    const dataFlowRefs: Array<{
+      sourceNodeId: string;
+      targetNodeId: string;
+      variableName?: string;
+      reason: string;
+    }> = [];
 
     for (const module of modules) {
       nodes.push(module.moduleNode);
@@ -42,25 +52,66 @@ export class PythonRelationResolver {
         dependencyRecords.push({ sourceModuleId: module.moduleNode.id, dependency });
       }
 
+      classSymbols.push(...module.classes);
       functionSymbols.push(...module.functions);
+      variableSymbols.push(...module.variables);
       callRefs.push(...module.callRefs);
+      dataFlowRefs.push(...module.dataFlowRefs);
     }
 
     nodes.push(
-      ...functionSymbols.map((symbol) => ({
+      ...classSymbols.map((symbol) => ({
         id: symbol.id,
-        type: 'function' as const,
+        type: 'class' as const,
         name: symbol.name,
+        layers: ['structural', 'dependency'] as GraphNode['layers'],
+        roles: ['type'] as GraphNode['roles'],
         filePath: symbol.filePath,
         line: symbol.line,
+        moduleName: symbol.moduleName,
         metadata: {
           moduleNodeId: symbol.moduleNodeId
         }
       }))
     );
 
+    nodes.push(
+      ...functionSymbols.map((symbol) => ({
+        id: symbol.id,
+        type: 'function' as const,
+        name: symbol.name,
+        layers: ['structural', 'dependency', 'dataflow'] as GraphNode['layers'],
+        roles: ['callable', 'transform'] as GraphNode['roles'],
+        filePath: symbol.filePath,
+        line: symbol.line,
+        moduleName: symbol.moduleName,
+        metadata: {
+          moduleNodeId: symbol.moduleNodeId,
+          classNodeId: symbol.classNodeId
+        }
+      }))
+    );
+
+    nodes.push(
+      ...variableSymbols.map((symbol) => ({
+        id: symbol.id,
+        type: 'variable' as const,
+        name: symbol.name,
+        layers: ['structural', 'dataflow'] as GraphNode['layers'],
+        roles: ['state'] as GraphNode['roles'],
+        filePath: symbol.filePath,
+        line: symbol.line,
+        moduleName: symbol.moduleName,
+        metadata: {
+          moduleNodeId: symbol.moduleNodeId,
+          functionNodeId: symbol.functionNodeId
+        }
+      }))
+    );
+
     const functionSymbolsByName = new Map<string, IndexedFunctionSymbol[]>();
     const functionSymbolsByModuleAndName = new Map<string, IndexedFunctionSymbol[]>();
+    const classSymbolsByName = new Map<string, IndexedClassSymbol[]>();
 
     for (const symbol of functionSymbols) {
       const list = functionSymbolsByName.get(symbol.name) ?? [];
@@ -73,27 +124,68 @@ export class PythonRelationResolver {
       functionSymbolsByModuleAndName.set(scopedKey, scopedList);
     }
 
-    for (const symbol of functionSymbols) {
-      this.addEdge(
-        edges,
-        uniqueEdgeIds,
-        {
-          id: `edge:contains:${symbol.moduleNodeId}->${symbol.id}`,
-          source: symbol.moduleNodeId,
-          target: symbol.id,
-          type: 'contains',
-          metadata: {
-            confidence: 1,
-            provenance: 'containment',
-            reason: 'Function is declared in module.'
-          }
+    for (const symbol of classSymbols) {
+      const list = classSymbolsByName.get(symbol.name) ?? [];
+      list.push(symbol);
+      classSymbolsByName.set(symbol.name, list);
+    }
+
+    for (const symbol of classSymbols) {
+      this.addEdge(edges, uniqueEdgeIds, {
+        id: `edge:contains:${symbol.moduleNodeId}->${symbol.id}`,
+        source: symbol.moduleNodeId,
+        target: symbol.id,
+        type: 'contains',
+        layer: 'structural',
+        metadata: {
+          confidence: 1,
+          provenance: 'containment',
+          reason: 'Class is declared in module.'
         }
-      );
+      });
+    }
+
+    for (const symbol of functionSymbols) {
+      const parentNodeId = symbol.classNodeId ?? symbol.moduleNodeId;
+      this.addEdge(edges, uniqueEdgeIds, {
+        id: `edge:contains:${parentNodeId}->${symbol.id}`,
+        source: parentNodeId,
+        target: symbol.id,
+        type: 'contains',
+        layer: 'structural',
+        metadata: {
+          confidence: 1,
+          provenance: 'containment',
+          reason: symbol.classNodeId
+            ? 'Method is declared in class.'
+            : 'Function is declared in module.'
+        }
+      });
+    }
+
+    for (const symbol of variableSymbols) {
+      const parentNodeId = symbol.functionNodeId ?? symbol.moduleNodeId;
+      this.addEdge(edges, uniqueEdgeIds, {
+        id: `edge:contains:${parentNodeId}->${symbol.id}`,
+        source: parentNodeId,
+        target: symbol.id,
+        type: 'contains',
+        layer: 'structural',
+        metadata: {
+          confidence: 1,
+          provenance: 'containment',
+          reason: symbol.functionNodeId
+            ? 'Variable is tracked inside function scope.'
+            : 'Variable is tracked at module scope.'
+        }
+      });
     }
 
     let resolvedCalls = 0;
     let unresolvedCalls = 0;
     let ambiguousCalls = 0;
+    let classUsageEdges = 0;
+    let dataFlowEdges = 0;
 
     for (const callRef of callRefs) {
       const resolution = this.resolveCallTarget(
@@ -106,27 +198,63 @@ export class PythonRelationResolver {
 
       if (resolution.targetFunctionId) {
         resolvedCalls += 1;
-        this.addEdge(
-          edges,
-          uniqueEdgeIds,
-          {
-            id: `edge:call:${callRef.sourceFunctionId}->${resolution.targetFunctionId}`,
-            source: callRef.sourceFunctionId,
-            target: resolution.targetFunctionId,
-            type: 'call',
-            metadata: {
-              confidence: resolution.confidence,
-              provenance: resolution.provenance,
-              reason: resolution.reason
-            }
+        this.addEdge(edges, uniqueEdgeIds, {
+          id: `edge:call:${callRef.sourceFunctionId}->${resolution.targetFunctionId}`,
+          source: callRef.sourceFunctionId,
+          target: resolution.targetFunctionId,
+          type: 'call',
+          layer: 'dependency',
+          metadata: {
+            confidence: resolution.confidence,
+            provenance: resolution.provenance,
+            reason: resolution.reason
           }
-        );
+        });
       } else {
         unresolvedCalls += 1;
         if (resolution.ambiguous) {
           ambiguousCalls += 1;
         }
       }
+
+      const classUsageTarget = this.resolveClassUsageTarget(callRef, classSymbolsByName);
+      if (classUsageTarget) {
+        classUsageEdges += 1;
+        this.addEdge(edges, uniqueEdgeIds, {
+          id: `edge:class-usage:${callRef.sourceFunctionId}->${classUsageTarget.id}`,
+          source: callRef.sourceFunctionId,
+          target: classUsageTarget.id,
+          type: 'class-usage',
+          layer: 'dependency',
+          metadata: {
+            confidence: 0.65,
+            provenance: 'heuristic',
+            reason: `Call expression references class-like symbol ${classUsageTarget.name}.`
+          }
+        });
+      }
+    }
+
+    for (const ref of dataFlowRefs) {
+      if (!this.nodeExists(nodes, ref.sourceNodeId) || !this.nodeExists(nodes, ref.targetNodeId)) {
+        continue;
+      }
+
+      const edgeId = `edge:dataflow:${ref.sourceNodeId}->${ref.targetNodeId}:${ref.reason}:${ref.variableName ?? '_'}`;
+      dataFlowEdges += 1;
+      this.addEdge(edges, uniqueEdgeIds, {
+        id: edgeId,
+        source: ref.sourceNodeId,
+        target: ref.targetNodeId,
+        type: 'dataflow',
+        layer: 'dataflow',
+        metadata: {
+          confidence: 0.58,
+          provenance: 'ast',
+          reason: ref.reason,
+          variable: ref.variableName
+        }
+      });
     }
 
     for (const record of dependencyRecords) {
@@ -142,27 +270,26 @@ export class PythonRelationResolver {
             id: externalId,
             type: 'module',
             name: moduleName,
+            layers: ['structural', 'dependency'],
+            roles: ['container', 'external'],
             metadata: { external: true }
           };
           externalModuleNodes.set(moduleName, externalNode);
         }
       }
 
-      this.addEdge(
-        edges,
-        uniqueEdgeIds,
-        {
-          id: `edge:dependency:${record.sourceModuleId}->${targetModuleId}`,
-          source: record.sourceModuleId,
-          target: targetModuleId,
-          type: 'dependency',
-          metadata: {
-            confidence: 0.88,
-            provenance: 'ast',
-            reason: 'Derived from import statement.'
-          }
+      this.addEdge(edges, uniqueEdgeIds, {
+        id: `edge:dependency:${record.sourceModuleId}->${targetModuleId}`,
+        source: record.sourceModuleId,
+        target: targetModuleId,
+        type: 'dependency',
+        layer: 'dependency',
+        metadata: {
+          confidence: 0.88,
+          provenance: 'ast',
+          reason: 'Derived from import statement.'
         }
-      );
+      });
     }
 
     nodes.push(...externalModuleNodes.values());
@@ -173,7 +300,11 @@ export class PythonRelationResolver {
       diagnostics: {
         resolvedCalls,
         unresolvedCalls,
-        ambiguousCalls
+        ambiguousCalls,
+        classUsageEdges,
+        dataFlowEdges,
+        indexedClasses: classSymbols.length,
+        indexedVariables: variableSymbols.length
       }
     };
   }
@@ -185,6 +316,27 @@ export class PythonRelationResolver {
 
     edgeIds.add(edge.id);
     edges.push(edge);
+  }
+
+  private nodeExists(nodes: GraphNode[], nodeId: string): boolean {
+    return nodes.some((node) => node.id === nodeId);
+  }
+
+  private resolveClassUsageTarget(
+    callRef: IndexedCallReference,
+    classSymbolsByName: Map<string, IndexedClassSymbol[]>
+  ): IndexedClassSymbol | undefined {
+    const firstToken = callRef.calleePath[0];
+    if (!firstToken || firstToken === 'self' || firstToken === 'cls') {
+      return undefined;
+    }
+
+    const classCandidates = classSymbolsByName.get(firstToken);
+    if (!classCandidates || classCandidates.length !== 1) {
+      return undefined;
+    }
+
+    return classCandidates[0];
   }
 
   private resolveCallTarget(
