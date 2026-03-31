@@ -1140,6 +1140,7 @@ class FlowDEPanel implements vscode.Disposable {
         </div>
         <div class="toolbar-actions">
           <button id="layout-btn" type="button">Layout: Clustered</button>
+          <button id="view-mode-btn" type="button">Mode: Guided</button>
           <button id="fit-btn" type="button">Fit</button>
           <button id="zoom-out-btn" type="button" aria-label="Zoom out">-</button>
           <button id="zoom-reset-btn" type="button">100%</button>
@@ -1233,7 +1234,7 @@ class FlowDEPanel implements vscode.Disposable {
             <p id="dependency-status" class="dependency-status">Select a node to analyze dependency impact.</p>
             <button id="focus-clear-btn" type="button">Clear focus</button>
           </div>
-          <div class="layer-panel" aria-label="Graph layer controls">
+          <div id="layer-panel" class="layer-panel" aria-label="Graph layer controls">
             <h3>Graph Layers</h3>
             <label class="focus-toggle">
               <input id="layer-structural" type="checkbox" checked />
@@ -1252,7 +1253,7 @@ class FlowDEPanel implements vscode.Disposable {
               <span>Execution</span>
             </label>
           </div>
-          <div class="abstraction-panel" aria-label="Graph abstraction controls">
+          <div id="abstraction-panel" class="abstraction-panel" aria-label="Graph abstraction controls">
             <h3>Abstraction</h3>
             <label class="focus-control">
               <span>Level</span>
@@ -1263,12 +1264,12 @@ class FlowDEPanel implements vscode.Disposable {
               </select>
             </label>
             <label class="focus-toggle">
-              <input id="abstraction-auto" type="checkbox" checked />
+              <input id="abstraction-auto" type="checkbox" />
               <span>Auto by zoom</span>
             </label>
-            <p id="abstraction-status" class="abstraction-status">Auto mode: Function level.</p>
+            <p id="abstraction-status" class="abstraction-status">Manual mode: Function level.</p>
           </div>
-          <div class="reduction-panel" aria-label="Smart graph reduction">
+          <div id="reduction-panel" class="reduction-panel" aria-label="Smart graph reduction">
             <h3>Smart Reduction</h3>
             <label class="focus-toggle">
               <input id="collapse-functions" type="checkbox" />
@@ -1280,7 +1281,7 @@ class FlowDEPanel implements vscode.Disposable {
             </label>
             <p id="reduction-hint" class="reduction-hint">Double-click modules to expand on demand.</p>
           </div>
-          <div class="execution-panel" aria-label="Execution controls">
+          <div id="execution-panel" class="execution-panel" aria-label="Execution controls">
             <h3>Execution</h3>
             <div class="execution-actions">
               <button id="execution-start-btn" type="button">Run Trace</button>
@@ -1296,7 +1297,7 @@ class FlowDEPanel implements vscode.Disposable {
               Run a trace to inspect inputs, outputs, and intermediate values.
             </div>
           </div>
-          <div class="graph-edit-panel" aria-label="Graph editing controls">
+          <div id="graph-edit-panel" class="graph-edit-panel" aria-label="Graph editing controls">
             <h3>Edit Graph -> Code</h3>
             <div class="graph-edit-section">
               <h4>Create Function</h4>
@@ -1356,7 +1357,7 @@ class FlowDEPanel implements vscode.Disposable {
             </div>
             <div id="graph-edit-status" class="graph-edit-status">Idle</div>
           </div>
-          <div class="call-path-panel" aria-label="Call path exploration controls">
+          <div id="callpath-panel" class="call-path-panel" aria-label="Call path exploration controls">
             <h3>Call Path Explorer</h3>
             <label class="focus-control">
               <span>Entry point</span>
@@ -1377,7 +1378,7 @@ class FlowDEPanel implements vscode.Disposable {
             </div>
             <div id="callpath-status" class="callpath-status">Auto mode: discovering broad flow patterns.</div>
           </div>
-          <div class="dataflow-panel" aria-label="Data flow exploration controls">
+          <div id="dataflow-panel" class="dataflow-panel" aria-label="Data flow exploration controls">
             <h3>Data Flow Explorer</h3>
             <label class="focus-control">
               <span>Source node</span>
@@ -1411,7 +1412,7 @@ class FlowDEPanel implements vscode.Disposable {
             <div id="node-inspector" class="node-inspector">Click a node to inspect dependencies.</div>
             <button id="open-source-btn" type="button" disabled>Open source</button>
           </div>
-          <div class="flow-controls" aria-label="Flow controls">
+          <div id="flow-controls-panel" class="flow-controls" aria-label="Flow controls">
             <label class="flow-control">
               <span>Min steps</span>
               <select id="flow-min-length">
@@ -1438,7 +1439,7 @@ class FlowDEPanel implements vscode.Disposable {
             <button id="flow-clear-btn" type="button">Clear highlight</button>
           </div>
           <ul id="flow-list" class="flow-list"></ul>
-          <div class="flow-steps-panel">
+          <div id="flow-steps-panel" class="flow-steps-panel">
             <div class="flow-steps-header">
               <h3>Flow Steps</h3>
               <div class="flow-playback" aria-label="Flow playback controls">

@@ -68,6 +68,14 @@ body {
   background: var(--button-hover);
 }
 
+#view-mode-btn {
+  border-color: color-mix(in srgb, #7ae582 35%, var(--panel-border));
+}
+
+#view-mode-btn.mode-full {
+  border-color: color-mix(in srgb, #f4a261 45%, var(--panel-border));
+}
+
 .toolbar-actions button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -707,6 +715,10 @@ body {
   border: 1px dashed var(--panel-border);
   border-radius: 6px;
   padding: 8px;
+}
+
+.panel-hidden {
+  display: none !important;
 }
 
 .graph-stage {

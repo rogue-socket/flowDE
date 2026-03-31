@@ -264,11 +264,21 @@ const flowPlayButton = getRequiredElement<HTMLButtonElement>('#flow-play-btn');
 const flowNextButton = getRequiredElement<HTMLButtonElement>('#flow-next-btn');
 const flowExplain = getRequiredElement<HTMLElement>('#flow-explain');
 const layoutButton = getRequiredElement<HTMLButtonElement>('#layout-btn');
+const viewModeButton = getRequiredElement<HTMLButtonElement>('#view-mode-btn');
 const fitButton = getRequiredElement<HTMLButtonElement>('#fit-btn');
 const zoomOutButton = getRequiredElement<HTMLButtonElement>('#zoom-out-btn');
 const zoomResetButton = getRequiredElement<HTMLButtonElement>('#zoom-reset-btn');
 const zoomInButton = getRequiredElement<HTMLButtonElement>('#zoom-in-btn');
 const refreshButton = getRequiredElement<HTMLButtonElement>('#refresh-btn');
+const layerPanel = getRequiredElement<HTMLElement>('#layer-panel');
+const abstractionPanel = getRequiredElement<HTMLElement>('#abstraction-panel');
+const reductionPanel = getRequiredElement<HTMLElement>('#reduction-panel');
+const executionPanel = getRequiredElement<HTMLElement>('#execution-panel');
+const graphEditPanel = getRequiredElement<HTMLElement>('#graph-edit-panel');
+const callPathPanel = getRequiredElement<HTMLElement>('#callpath-panel');
+const dataFlowPanel = getRequiredElement<HTMLElement>('#dataflow-panel');
+const flowControlsPanel = getRequiredElement<HTMLElement>('#flow-controls-panel');
+const flowStepsPanel = getRequiredElement<HTMLElement>('#flow-steps-panel');
 let currentLayoutMode: LayoutMode = 'clustered';
 let latestGraphData: GraphData | undefined;
 let latestDisplayedGraphData: GraphData | undefined;
@@ -279,6 +289,7 @@ let flowDefinitions: FlowDefinition[] = [];
 let selectedFlowId: string | undefined;
 let selectedStepIndex: number | undefined;
 let selectedNodeId: string | undefined;
+let guidedModeEnabled = true;
 let playbackTimer: number | undefined;
 let isPlaybackRunning = false;
 let executionPlaybackTimer: number | undefined;
@@ -292,6 +303,18 @@ const nodeCatalog = new Map<string, GraphNode>();
 const callEdgeByPair = new Map<string, string>();
 const anyEdgeByPair = new Map<string, string>();
 const edgeCatalog = new Map<string, GraphEdge>();
+const advancedPanels: HTMLElement[] = [
+  layerPanel,
+  abstractionPanel,
+  reductionPanel,
+  executionPanel,
+  graphEditPanel,
+  callPathPanel,
+  dataFlowPanel,
+  flowControlsPanel,
+  flowList,
+  flowStepsPanel
+];
 
 const flowFilters: FlowFilters = {
   minSteps: Number.parseInt(flowMinLength.value, 10) || 2,
@@ -709,6 +732,10 @@ layoutButton.addEventListener('click', () => {
   if (latestGraphData) {
     applyLayout(latestGraphData, true);
   }
+});
+
+viewModeButton.addEventListener('click', () => {
+  setGuidedMode(!guidedModeEnabled, true);
 });
 
 fitButton.addEventListener('click', () => {
@@ -1294,7 +1321,8 @@ dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
 abstractionLevelSelect.value = graphAbstraction.manualLevel;
 abstractionAutoToggle.checked = graphAbstraction.autoByZoom;
 syncAbstractionLevelFromZoom(false);
-updateNavigationStatus('Use Overview Mode first, then Follow Selection to drill in.');
+setGuidedMode(true, false);
+updateNavigationStatus('Guided mode active. Start with Show full map, then click a node to drill in.');
 updateQuickStartStatus();
 callPathDepth.value = String(callPathExplorer.maxDepth);
 callPathDepthValue.textContent = String(callPathExplorer.maxDepth);
@@ -1941,6 +1969,46 @@ function updateNavigationStatus(message: string): void {
   navigationStatus.textContent = message;
 }
 
+function setGuidedMode(enabled: boolean, rerender: boolean): void {
+  guidedModeEnabled = enabled;
+  viewModeButton.textContent = enabled ? 'Mode: Guided' : 'Mode: Full';
+  viewModeButton.classList.toggle('mode-full', !enabled);
+
+  for (const panel of advancedPanels) {
+    panel.classList.toggle('panel-hidden', enabled);
+  }
+
+  if (enabled) {
+    if (graphAbstraction.autoByZoom) {
+      graphAbstraction.autoByZoom = false;
+      abstractionAutoToggle.checked = false;
+    }
+
+    if (graphAbstraction.manualLevel === 'detail') {
+      graphAbstraction.manualLevel = 'function';
+      abstractionLevelSelect.value = 'function';
+    }
+
+    graphAbstraction.effectiveLevel = graphAbstraction.manualLevel;
+    updateAbstractionStatus();
+
+    if (rerender) {
+      rerenderGraphFromSource();
+      fitGraphToCurrentView();
+    }
+
+    updateNavigationStatus('Guided mode: core controls only, stable zoom, advanced tools minimized.');
+  } else {
+    if (rerender) {
+      rerenderGraphFromSource();
+    }
+
+    updateNavigationStatus('Full mode: all analysis panels are visible.');
+  }
+
+  updateQuickStartStatus();
+}
+
 function setQuickStepState(element: HTMLElement, done: boolean): void {
   element.textContent = done ? 'Done' : 'Pending';
   element.classList.toggle('done', done);
@@ -2088,13 +2156,13 @@ function resetNavigationState(): void {
 
   graphAbstraction.manualLevel = 'function';
   abstractionLevelSelect.value = 'function';
-  graphAbstraction.autoByZoom = true;
-  abstractionAutoToggle.checked = true;
+  graphAbstraction.autoByZoom = false;
+  abstractionAutoToggle.checked = false;
 
   renderFlowSidebar();
   syncAbstractionLevelFromZoom(true);
   fitGraphToCurrentView();
-  updateNavigationStatus('Navigation reset: auto abstraction restored and full graph fitted.');
+  updateNavigationStatus('Navigation reset: stable function-level view restored and full graph fitted.');
   updateQuickStartStatus();
 }
 
