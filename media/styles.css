@@ -115,7 +115,8 @@ body {
 }
 
 .focus-panel,
-.node-inspector-panel {
+.node-inspector-panel,
+.reduction-panel {
   display: grid;
   gap: 7px;
   border: 1px solid var(--panel-border);
@@ -125,11 +126,19 @@ body {
 }
 
 .focus-panel h3,
-.node-inspector-panel h3 {
+.node-inspector-panel h3,
+.reduction-panel h3 {
   margin: 0;
   font-size: 11px;
   color: var(--muted-fg);
   font-weight: 600;
+}
+
+.reduction-hint {
+  margin: 0;
+  font-size: 10px;
+  color: var(--muted-fg);
+  line-height: 1.35;
 }
 
 .focus-control {

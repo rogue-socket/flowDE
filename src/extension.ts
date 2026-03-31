@@ -240,6 +240,18 @@ class FlowDEPanel implements vscode.Disposable {
             </label>
             <button id="focus-clear-btn" type="button">Clear focus</button>
           </div>
+          <div class="reduction-panel" aria-label="Smart graph reduction">
+            <h3>Smart Reduction</h3>
+            <label class="focus-toggle">
+              <input id="collapse-functions" type="checkbox" />
+              <span>Collapse internal functions</span>
+            </label>
+            <label class="focus-toggle">
+              <input id="collapse-libraries" type="checkbox" checked />
+              <span>Collapse libraries</span>
+            </label>
+            <p id="reduction-hint" class="reduction-hint">Double-click modules to expand on demand.</p>
+          </div>
           <div class="node-inspector-panel" aria-label="Node inspector">
             <h3>Selection</h3>
             <div id="node-inspector" class="node-inspector">Click a node to inspect dependencies.</div>

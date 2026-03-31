@@ -25,6 +25,7 @@ interface GraphEdge {
     confidence?: number;
     provenance?: string;
     reason?: string;
+    [key: string]: unknown;
   };
 }
 
@@ -76,6 +77,13 @@ interface FocusFilters {
   neighborhoodOnly: boolean;
 }
 
+interface ReductionState {
+  collapseInternalFunctions: boolean;
+  collapseLibraries: boolean;
+  expandedModuleIds: Set<string>;
+  librariesExpanded: boolean;
+}
+
 interface MinimapTransform {
   scale: number;
   offsetX: number;
@@ -91,6 +99,9 @@ const flowMeta = getRequiredElement<HTMLElement>('#flow-meta');
 const focusFile = getRequiredElement<HTMLSelectElement>('#focus-file');
 const focusNeighborhood = getRequiredElement<HTMLInputElement>('#focus-neighborhood');
 const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
+const collapseFunctionsToggle = getRequiredElement<HTMLInputElement>('#collapse-functions');
+const collapseLibrariesToggle = getRequiredElement<HTMLInputElement>('#collapse-libraries');
+const reductionHint = getRequiredElement<HTMLElement>('#reduction-hint');
 const nodeInspector = getRequiredElement<HTMLElement>('#node-inspector');
 const openSourceButton = getRequiredElement<HTMLButtonElement>('#open-source-btn');
 const flowMinLength = getRequiredElement<HTMLSelectElement>('#flow-min-length');
@@ -112,6 +123,7 @@ const zoomInButton = getRequiredElement<HTMLButtonElement>('#zoom-in-btn');
 const refreshButton = getRequiredElement<HTMLButtonElement>('#refresh-btn');
 let currentLayoutMode: LayoutMode = 'clustered';
 let latestGraphData: GraphData | undefined;
+let latestDisplayedGraphData: GraphData | undefined;
 let hasInitializedViewport = false;
 let minimapUpdateRequested = false;
 let minimapTransform: MinimapTransform | undefined;
@@ -135,6 +147,15 @@ const focusFilters: FocusFilters = {
   moduleNodeId: 'all',
   neighborhoodOnly: false
 };
+
+const reductionState: ReductionState = {
+  collapseInternalFunctions: collapseFunctionsToggle.checked,
+  collapseLibraries: collapseLibrariesToggle.checked,
+  expandedModuleIds: new Set<string>(),
+  librariesExpanded: false
+};
+
+const COLLAPSED_LIBRARIES_NODE_ID = 'module:external:collapsed';
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2.4;
@@ -190,6 +211,14 @@ const graph = cytoscape({
       style: {
         'border-width': 3,
         'border-color': '#f4a261'
+      }
+    },
+    {
+      selector: 'node[reductionCollapsed = 1]',
+      style: {
+        'border-style': 'dashed',
+        'border-width': 2,
+        'border-color': '#9cbf7c'
       }
     },
     {
@@ -346,6 +375,10 @@ graph.on('dbltap', 'node', (event: cytoscape.EventObject) => {
     return;
   }
 
+  if (toggleReductionExpansion(nodeId)) {
+    return;
+  }
+
   openNodeSource(nodeId);
 });
 
@@ -483,6 +516,26 @@ focusClearButton.addEventListener('click', () => {
   applyFlowHighlighting();
 });
 
+collapseFunctionsToggle.addEventListener('change', () => {
+  reductionState.collapseInternalFunctions = collapseFunctionsToggle.checked;
+  if (!reductionState.collapseInternalFunctions) {
+    reductionState.expandedModuleIds.clear();
+  }
+
+  updateReductionHint();
+  rerenderGraphFromSource();
+});
+
+collapseLibrariesToggle.addEventListener('change', () => {
+  reductionState.collapseLibraries = collapseLibrariesToggle.checked;
+  if (!reductionState.collapseLibraries) {
+    reductionState.librariesExpanded = false;
+  }
+
+  updateReductionHint();
+  rerenderGraphFromSource();
+});
+
 openSourceButton.addEventListener('click', () => {
   if (!selectedNodeId) {
     return;
@@ -563,21 +616,27 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
 
 updateZoomResetLabel();
 focusNeighborhood.checked = focusFilters.neighborhoodOnly;
+collapseFunctionsToggle.checked = reductionState.collapseInternalFunctions;
+collapseLibrariesToggle.checked = reductionState.collapseLibraries;
+updateReductionHint();
 flowConfidenceValue.textContent = `${Math.round(flowFilters.minConfidence * 100)}%`;
 scheduleMinimapRender();
 vscode.postMessage({ type: 'ready' });
 
 function renderGraph(graphData: GraphData): void {
   latestGraphData = graphData;
+  const displayedGraphData = buildDisplayedGraphData(graphData);
+  latestDisplayedGraphData = displayedGraphData;
+
   nodeCatalog.clear();
   callEdgeByPair.clear();
   edgeCatalog.clear();
 
-  for (const node of graphData.nodes) {
+  for (const node of displayedGraphData.nodes) {
     nodeCatalog.set(node.id, node);
   }
 
-  for (const edge of graphData.edges) {
+  for (const edge of displayedGraphData.edges) {
     edgeCatalog.set(edge.id, edge);
 
     if (edge.type !== 'call') {
@@ -587,21 +646,26 @@ function renderGraph(graphData: GraphData): void {
     callEdgeByPair.set(flowPairKey(edge.source, edge.target), edge.id);
   }
 
+  if (selectedNodeId && !nodeCatalog.has(selectedNodeId)) {
+    selectedNodeId = undefined;
+  }
+
   syncFocusFileOptions(graphData);
   syncModuleFilterOptions(graphData);
 
   const elements = [
-    ...graphData.nodes.map((node) => ({
+    ...displayedGraphData.nodes.map((node) => ({
       data: {
         id: node.id,
         label: formatNodeLabel(node),
         type: node.type,
         filePath: node.filePath,
         line: node.line,
-        external: node.metadata?.external ? 1 : 0
+        external: node.metadata?.external ? 1 : 0,
+        reductionCollapsed: node.metadata?.reductionCollapsed ? 1 : 0
       }
     })),
-    ...graphData.edges.map((edge) => ({
+    ...displayedGraphData.edges.map((edge) => ({
       data: {
         id: edge.id,
         source: edge.source,
@@ -617,8 +681,8 @@ function renderGraph(graphData: GraphData): void {
   applyFlowFilters();
 
   const shouldFit = !hasInitializedViewport;
-  applyLayout(graphData, shouldFit);
-  if (graphData.nodes.length > 0) {
+  applyLayout(displayedGraphData, shouldFit);
+  if (displayedGraphData.nodes.length > 0) {
     hasInitializedViewport = true;
   }
 
@@ -637,7 +701,7 @@ function renderGraph(graphData: GraphData): void {
       : '';
   const warningCompact = graphData.meta.parseWarnings.length > 0 ? ' | warnings' : '';
 
-  statusText.textContent = `${graphData.meta.workspaceName} | ${graphData.nodes.length} nodes | ${graphData.edges.length} edges${relationSuffix}${cacheSuffix}${warningCompact}`;
+  statusText.textContent = `${graphData.meta.workspaceName} | ${displayedGraphData.nodes.length} nodes | ${displayedGraphData.edges.length} edges${relationSuffix}${cacheSuffix}${warningCompact}`;
 }
 
 function renderFlowSidebar(): void {
@@ -947,8 +1011,229 @@ function flowPairKey(sourceId: string, targetId: string): string {
   return `${sourceId}=>${targetId}`;
 }
 
-function applyFlowFilters(): void {
+function rerenderGraphFromSource(): void {
   if (!latestGraphData) {
+    return;
+  }
+
+  renderGraph(latestGraphData);
+}
+
+function updateReductionHint(): void {
+  if (!reductionState.collapseInternalFunctions && !reductionState.collapseLibraries) {
+    reductionHint.textContent = 'Reduction off: full graph shown.';
+    return;
+  }
+
+  const parts: string[] = [];
+
+  if (reductionState.collapseInternalFunctions) {
+    const expandedCount = reductionState.expandedModuleIds.size;
+    parts.push(
+      expandedCount > 0
+        ? `${expandedCount} module${expandedCount === 1 ? '' : 's'} expanded`
+        : 'modules collapsed'
+    );
+  }
+
+  if (reductionState.collapseLibraries) {
+    parts.push(reductionState.librariesExpanded ? 'libraries expanded' : 'libraries collapsed');
+  }
+
+  reductionHint.textContent = `Double-click to expand on demand (${parts.join(', ')}).`;
+}
+
+function toggleReductionExpansion(nodeId: string): boolean {
+  if (nodeId === COLLAPSED_LIBRARIES_NODE_ID && reductionState.collapseLibraries) {
+    reductionState.librariesExpanded = !reductionState.librariesExpanded;
+    updateReductionHint();
+    rerenderGraphFromSource();
+    return true;
+  }
+
+  const node = nodeCatalog.get(nodeId);
+  if (!node || node.type !== 'module' || node.metadata?.external) {
+    return false;
+  }
+
+  if (!reductionState.collapseInternalFunctions) {
+    return false;
+  }
+
+  if (reductionState.expandedModuleIds.has(nodeId)) {
+    reductionState.expandedModuleIds.delete(nodeId);
+  } else {
+    reductionState.expandedModuleIds.add(nodeId);
+  }
+
+  updateReductionHint();
+  rerenderGraphFromSource();
+  return true;
+}
+
+function buildDisplayedGraphData(source: GraphData): GraphData {
+  const sourceNodesById = new Map(source.nodes.map((node) => [node.id, node]));
+  const functionNodes = source.nodes.filter((node) => node.type === 'function');
+  const moduleNodes = source.nodes.filter((node) => node.type === 'module');
+  const externalModuleIds = new Set(
+    moduleNodes.filter((node) => node.metadata?.external).map((node) => node.id)
+  );
+
+  const moduleIds = new Set(moduleNodes.filter((node) => !node.metadata?.external).map((node) => node.id));
+  for (const expandedId of [...reductionState.expandedModuleIds]) {
+    if (!moduleIds.has(expandedId)) {
+      reductionState.expandedModuleIds.delete(expandedId);
+    }
+  }
+
+  const hiddenFunctionIds = new Set<string>();
+  const hiddenFunctionCountByModule = new Map<string, number>();
+
+  if (reductionState.collapseInternalFunctions) {
+    for (const functionNode of functionNodes) {
+      const moduleNodeId = getModuleNodeId(functionNode);
+      if (!moduleNodeId || reductionState.expandedModuleIds.has(moduleNodeId)) {
+        continue;
+      }
+
+      hiddenFunctionIds.add(functionNode.id);
+      hiddenFunctionCountByModule.set(
+        moduleNodeId,
+        (hiddenFunctionCountByModule.get(moduleNodeId) ?? 0) + 1
+      );
+    }
+  }
+
+  const hiddenExternalModuleIds =
+    reductionState.collapseLibraries && !reductionState.librariesExpanded ? externalModuleIds : new Set<string>();
+
+  const visibleNodes: GraphNode[] = [];
+
+  for (const node of source.nodes) {
+    if (hiddenFunctionIds.has(node.id)) {
+      continue;
+    }
+
+    if (hiddenExternalModuleIds.has(node.id)) {
+      continue;
+    }
+
+    const metadata = { ...(node.metadata ?? {}) };
+    const collapsedCount = hiddenFunctionCountByModule.get(node.id) ?? 0;
+    if (node.type === 'module' && collapsedCount > 0) {
+      metadata.collapsedFunctions = collapsedCount;
+      metadata.reductionCollapsed = true;
+    }
+
+    visibleNodes.push({
+      ...node,
+      metadata
+    });
+  }
+
+  const aggregatedCallCounts = new Map<string, number>();
+  const aggregatedLibraryDeps = new Map<string, number>();
+  const visibleEdges: GraphEdge[] = [];
+
+  for (const edge of source.edges) {
+    const sourceHiddenFunction = hiddenFunctionIds.has(edge.source);
+    const targetHiddenFunction = hiddenFunctionIds.has(edge.target);
+    const sourceHiddenExternal = hiddenExternalModuleIds.has(edge.source);
+    const targetHiddenExternal = hiddenExternalModuleIds.has(edge.target);
+
+    if (sourceHiddenExternal || targetHiddenExternal) {
+      if (
+        edge.type === 'dependency' &&
+        reductionState.collapseLibraries &&
+        !reductionState.librariesExpanded &&
+        !sourceHiddenExternal
+      ) {
+        aggregatedLibraryDeps.set(edge.source, (aggregatedLibraryDeps.get(edge.source) ?? 0) + 1);
+      }
+      continue;
+    }
+
+    if (sourceHiddenFunction || targetHiddenFunction) {
+      if (edge.type === 'call' && reductionState.collapseInternalFunctions) {
+        const sourceModuleId = thisNodeModuleId(sourceNodesById.get(edge.source));
+        const targetModuleId = thisNodeModuleId(sourceNodesById.get(edge.target));
+
+        if (sourceModuleId && targetModuleId) {
+          const key = flowPairKey(sourceModuleId, targetModuleId);
+          aggregatedCallCounts.set(key, (aggregatedCallCounts.get(key) ?? 0) + 1);
+        }
+      }
+
+      continue;
+    }
+
+    visibleEdges.push({ ...edge });
+  }
+
+  for (const [pairKey, count] of aggregatedCallCounts.entries()) {
+    const [sourceId, targetId] = pairKey.split('=>');
+    if (!sourceId || !targetId) {
+      continue;
+    }
+
+    visibleEdges.push({
+      id: `edge:reduction:call:${sourceId}->${targetId}`,
+      source: sourceId,
+      target: targetId,
+      type: 'call',
+      metadata: {
+        reduced: true,
+        collapsedCallCount: count,
+        confidence: 0.52,
+        provenance: 'heuristic',
+        reason: `${count} collapsed function call${count === 1 ? '' : 's'}`
+      }
+    });
+  }
+
+  if (reductionState.collapseLibraries && !reductionState.librariesExpanded) {
+    const hiddenExternalCount = hiddenExternalModuleIds.size;
+
+    if (hiddenExternalCount > 0) {
+      visibleNodes.push({
+        id: COLLAPSED_LIBRARIES_NODE_ID,
+        type: 'module',
+        name: 'Libraries',
+        metadata: {
+          external: true,
+          reduced: true,
+          collapsedLibrariesCount: hiddenExternalCount,
+          reductionCollapsed: true
+        }
+      });
+
+      for (const [sourceId, count] of aggregatedLibraryDeps.entries()) {
+        visibleEdges.push({
+          id: `edge:reduction:dep:${sourceId}->${COLLAPSED_LIBRARIES_NODE_ID}`,
+          source: sourceId,
+          target: COLLAPSED_LIBRARIES_NODE_ID,
+          type: 'dependency',
+          metadata: {
+            reduced: true,
+            collapsedDependencyCount: count,
+            confidence: 0.66,
+            provenance: 'heuristic',
+            reason: `${count} hidden library dependenc${count === 1 ? 'y' : 'ies'}`
+          }
+        });
+      }
+    }
+  }
+
+  return {
+    ...source,
+    nodes: visibleNodes,
+    edges: visibleEdges
+  };
+}
+
+function applyFlowFilters(): void {
+  if (!latestDisplayedGraphData) {
     flowDefinitions = [];
     selectedFlowId = undefined;
     selectedStepIndex = undefined;
@@ -958,7 +1243,7 @@ function applyFlowFilters(): void {
   }
 
   stopPlayback();
-  flowDefinitions = buildFlowDefinitions(latestGraphData, flowFilters);
+  flowDefinitions = buildFlowDefinitions(latestDisplayedGraphData, flowFilters);
 
   if (selectedFlowId && !flowDefinitions.some((flow) => flow.id === selectedFlowId)) {
     selectedFlowId = undefined;
@@ -1481,12 +1766,39 @@ function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
 }
 
 function formatNodeLabel(node: GraphNode): string {
+  if (node.id === COLLAPSED_LIBRARIES_NODE_ID) {
+    const count = typeof node.metadata?.collapsedLibrariesCount === 'number'
+      ? node.metadata.collapsedLibrariesCount
+      : 0;
+    return count > 0 ? `Libraries (+${count})` : node.name;
+  }
+
+  if (node.type === 'module') {
+    const collapsedCount =
+      typeof node.metadata?.collapsedFunctions === 'number' ? node.metadata.collapsedFunctions : 0;
+    if (collapsedCount > 0) {
+      return `${node.name} (+${collapsedCount})`;
+    }
+  }
+
   return node.name;
 }
 
 function getModuleNodeId(node: GraphNode): string | undefined {
   const rawValue = node.metadata?.moduleNodeId;
   return typeof rawValue === 'string' ? rawValue : undefined;
+}
+
+function thisNodeModuleId(node: GraphNode | undefined): string | undefined {
+  if (!node) {
+    return undefined;
+  }
+
+  if (node.type === 'module') {
+    return node.id;
+  }
+
+  return getModuleNodeId(node);
 }
 
 function zoomByFactor(factor: number): void {
