@@ -2,6 +2,7 @@
   "name": "flowde",
   "displayName": "FlowDE",
   "description": "Graph-based code comprehension layer for Python projects in VS Code.",
+  "icon": "media/icon.png",
   "version": "0.1.0",
   "publisher": "flowde",
   "license": "MIT",
