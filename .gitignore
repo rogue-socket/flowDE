@@ -6,3 +6,7 @@ media/webview.js.map
 coverage/
 *.vsix
 .DS_Store
+*.log
+.env
+.env.*
+user.env
