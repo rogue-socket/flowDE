@@ -164,6 +164,31 @@ npm install
 npm run build
 ```
 
+### Package for Marketplace
+
+```bash
+npm run package
+```
+
+This generates a `.vsix` bundle in the project root.
+
+### Publish to Marketplace
+
+1. Create a Personal Access Token (PAT) for the Visual Studio Marketplace.
+2. Log in once from your machine:
+
+```bash
+npx vsce login flowde
+```
+
+3. Publish the current version:
+
+```bash
+npm run publish
+```
+
+Versioning tip: bump `version` in `package.json` before each publish.
+
 ### Run Extension
 
 1. Open this repository in VS Code.
