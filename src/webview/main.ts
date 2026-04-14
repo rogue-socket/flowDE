@@ -1,6 +1,3 @@
-/**
- * FlowDE webview controller for rendering the graph and handling interactive analysis tools.
- */
 import cytoscape = require('cytoscape');
 
 declare function acquireVsCodeApi(): {
@@ -9,13 +6,7 @@ declare function acquireVsCodeApi(): {
 
 type GraphLayer = 'structural' | 'dependency' | 'dataflow' | 'execution';
 type GraphNodeType = 'function' | 'variable' | 'module' | 'class';
-type GraphEdgeType =
-  | 'call'
-  | 'dependency'
-  | 'contains'
-  | 'class-usage'
-  | 'dataflow'
-  | 'execution-path';
+type GraphEdgeType = 'call' | 'dependency' | 'contains' | 'class-usage' | 'dataflow' | 'execution-path';
 
 interface GraphNode {
   id: string;
@@ -25,6 +16,7 @@ interface GraphNode {
   roles: string[];
   filePath?: string;
   line?: number;
+  moduleName?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -34,12 +26,7 @@ interface GraphEdge {
   target: string;
   type: GraphEdgeType;
   layer: GraphLayer;
-  metadata?: {
-    confidence?: number;
-    provenance?: string;
-    reason?: string;
-    [key: string]: unknown;
-  };
+  metadata?: Record<string, unknown>;
 }
 
 interface GraphData {
@@ -51,1300 +38,71 @@ interface GraphData {
     fileCount: number;
     engineVersion: string;
     layerStats: Record<GraphLayer, { nodes: number; edges: number; visibleByDefault: boolean }>;
-    diagnostics: {
-      resolvedCalls: number;
-      unresolvedCalls: number;
-      ambiguousCalls: number;
-      classUsageEdges: number;
-      dataFlowEdges: number;
-      indexedClasses: number;
-      indexedVariables: number;
-      parserCacheHits: number;
-      parserCacheMisses: number;
-    };
+    diagnostics: Record<string, number>;
     parseWarnings: string[];
   };
 }
 
 type IncomingMessage =
   | { type: 'graphData'; payload: GraphData }
-  | { type: 'graphError'; message: string }
-  | { type: 'graphEditResult'; ok: boolean; message: string }
-  | { type: 'executionReset'; entryFilePath: string }
-  | { type: 'executionEvent'; payload: ExecutionTraceEvent }
-  | { type: 'executionComplete'; summary: { totalEvents: number; exitCode?: number; stopped?: boolean } }
-  | { type: 'executionError'; message: string };
+  | { type: 'graphError'; message: string };
 
-type ExecutionEventType = 'call' | 'line' | 'return' | 'exception';
-
-interface ExecutionTraceEvent {
-  index: number;
-  eventType: ExecutionEventType;
-  timestamp: number;
-  filePath: string;
-  line: number;
-  definitionLine?: number;
-  functionName: string;
-  qualifiedName?: string;
-  nodeId?: string;
-  inputs?: Record<string, unknown>;
-  locals?: Record<string, unknown>;
-  output?: unknown;
-  exception?: string;
-}
-
-type LayoutMode = 'clustered' | 'force';
-
-interface Point {
-  x: number;
-  y: number;
-}
+type LayoutMode = 'vertical' | 'force';
 
 interface FlowDefinition {
   id: string;
-  name: string;
   nodeIds: string[];
   edgeIds: string[];
-}
-
-interface FlowFilters {
-  minSteps: number;
-  minConfidence: number;
-  moduleId: string;
-}
-
-interface FocusFilters {
-  moduleNodeId: string;
-  neighborhoodOnly: boolean;
-}
-
-type FocusVisibilityMode = 'dim' | 'hide';
-
-interface DeclutterState {
-  visibilityMode: FocusVisibilityMode;
-  layoutSpacing: number;
-}
-
-interface DrillTrailState {
-  enabled: boolean;
-  nodeSequence: string[];
-  edgeSequence: string[];
-}
-
-type DependencyDirection = 'upstream' | 'downstream' | 'both';
-
-interface DependencyTraversalState {
-  direction: DependencyDirection;
-  maxHops: number;
-}
-
-interface DependencyAnalysisSnapshot {
-  upstreamNodeIds: Set<string>;
-  downstreamNodeIds: Set<string>;
-  upstreamEdgeIds: Set<string>;
-  downstreamEdgeIds: Set<string>;
-  blastRadiusNodeCount: number;
-}
-
-interface CallPathExplorerState {
-  enabled: boolean;
-  entryNodeId: string;
-  maxDepth: number;
-}
-
-type DataFlowDirection = 'forward' | 'backward' | 'both';
-
-interface DataFlowExplorerState {
-  enabled: boolean;
-  sourceNodeId: string;
-  direction: DataFlowDirection;
-  maxHops: number;
-}
-
-interface DataFlowAnalysisSnapshot {
-  sourceNodeId: string;
-  nodeIds: Set<string>;
-  edgeIds: Set<string>;
-  forwardCount: number;
-  backwardCount: number;
-  transformationCount: number;
-}
-
-type JourneyMode = 'file' | 'code';
-
-interface JourneyState {
-  enabled: boolean;
-  mode: JourneyMode;
-  entryNodeId: string;
-  nodeIds: string[];
-  edgeIds: string[];
-  currentIndex: number;
-}
-
-type AbstractionLevel = 'system' | 'function' | 'detail';
-
-interface GraphAbstractionState {
-  manualLevel: AbstractionLevel;
-  autoByZoom: boolean;
-  effectiveLevel: AbstractionLevel;
-}
-
-interface ReductionState {
-  collapseInternalFunctions: boolean;
-  collapseLibraries: boolean;
-  expandedModuleIds: Set<string>;
-  librariesExpanded: boolean;
-}
-
-interface LayerVisibility {
-  structural: boolean;
-  dependency: boolean;
-  dataflow: boolean;
-  execution: boolean;
-}
-
-interface MinimapTransform {
-  scale: number;
-  offsetX: number;
-  offsetY: number;
+  label: string;
 }
 
 const vscode = acquireVsCodeApi();
 const graphContainer = getRequiredElement<HTMLElement>('#graph-canvas');
-const minimapCanvas = getRequiredElement<HTMLCanvasElement>('#minimap-canvas');
-const minimapContext = getRequiredCanvasContext(minimapCanvas);
 const statusText = getRequiredElement<HTMLElement>('#status');
 const flowMeta = getRequiredElement<HTMLElement>('#flow-meta');
-const focusFile = getRequiredElement<HTMLSelectElement>('#focus-file');
-const focusNeighborhood = getRequiredElement<HTMLInputElement>('#focus-neighborhood');
-const dependencyDirection = getRequiredElement<HTMLSelectElement>('#dependency-direction');
-const dependencyHops = getRequiredElement<HTMLInputElement>('#dependency-hops');
-const dependencyHopsValue = getRequiredElement<HTMLElement>('#dependency-hops-value');
-const focusVisibilitySelect = getRequiredElement<HTMLSelectElement>('#focus-visibility');
-const layoutSpacing = getRequiredElement<HTMLInputElement>('#layout-spacing');
-const layoutSpacingValue = getRequiredElement<HTMLElement>('#layout-spacing-value');
-const dependencyStatus = getRequiredElement<HTMLElement>('#dependency-status');
-const callPathEntry = getRequiredElement<HTMLSelectElement>('#callpath-entry');
-const callPathDepth = getRequiredElement<HTMLInputElement>('#callpath-depth');
-const callPathDepthValue = getRequiredElement<HTMLElement>('#callpath-depth-value');
-const callPathRunButton = getRequiredElement<HTMLButtonElement>('#callpath-run-btn');
-const callPathClearButton = getRequiredElement<HTMLButtonElement>('#callpath-clear-btn');
-const callPathStatus = getRequiredElement<HTMLElement>('#callpath-status');
-const dataFlowSource = getRequiredElement<HTMLSelectElement>('#dataflow-source');
-const dataFlowDirection = getRequiredElement<HTMLSelectElement>('#dataflow-direction');
-const dataFlowHops = getRequiredElement<HTMLInputElement>('#dataflow-hops');
-const dataFlowHopsValue = getRequiredElement<HTMLElement>('#dataflow-hops-value');
-const dataFlowRunButton = getRequiredElement<HTMLButtonElement>('#dataflow-run-btn');
-const dataFlowClearButton = getRequiredElement<HTMLButtonElement>('#dataflow-clear-btn');
-const dataFlowStatus = getRequiredElement<HTMLElement>('#dataflow-status');
-const abstractionLevelSelect = getRequiredElement<HTMLSelectElement>('#abstraction-level');
-const abstractionAutoToggle = getRequiredElement<HTMLInputElement>('#abstraction-auto');
-const abstractionStatus = getRequiredElement<HTMLElement>('#abstraction-status');
-const navigationOverviewButton = getRequiredElement<HTMLButtonElement>('#nav-overview-btn');
-const navigationFollowSelectionButton = getRequiredElement<HTMLButtonElement>('#nav-follow-selection-btn');
-const navigationResetButton = getRequiredElement<HTMLButtonElement>('#nav-reset-btn');
-const navigationStatus = getRequiredElement<HTMLElement>('#navigation-status');
-const journeyModeSelect = getRequiredElement<HTMLSelectElement>('#journey-mode');
-const journeyEntrySelect = getRequiredElement<HTMLSelectElement>('#journey-entry');
-const journeyStartButton = getRequiredElement<HTMLButtonElement>('#journey-start-btn');
-const journeyPrevButton = getRequiredElement<HTMLButtonElement>('#journey-prev-btn');
-const journeyNextButton = getRequiredElement<HTMLButtonElement>('#journey-next-btn');
-const journeyClearButton = getRequiredElement<HTMLButtonElement>('#journey-clear-btn');
-const workflowContext = getRequiredElement<HTMLElement>('#workflow-context');
-const journeyMeta = getRequiredElement<HTMLElement>('#journey-meta');
-const journeyStatus = getRequiredElement<HTMLElement>('#journey-status');
-const trailStatus = getRequiredElement<HTMLElement>('#trail-status');
-const trailHistory = getRequiredElement<HTMLOListElement>('#trail-history');
-const focusClearButton = getRequiredElement<HTMLButtonElement>('#focus-clear-btn');
-const layerStructuralToggle = getRequiredElement<HTMLInputElement>('#layer-structural');
-const layerDependencyToggle = getRequiredElement<HTMLInputElement>('#layer-dependency');
-const layerDataFlowToggle = getRequiredElement<HTMLInputElement>('#layer-dataflow');
-const layerExecutionToggle = getRequiredElement<HTMLInputElement>('#layer-execution');
-const collapseFunctionsToggle = getRequiredElement<HTMLInputElement>('#collapse-functions');
-const collapseLibrariesToggle = getRequiredElement<HTMLInputElement>('#collapse-libraries');
-const reductionHint = getRequiredElement<HTMLElement>('#reduction-hint');
-const executionStartButton = getRequiredElement<HTMLButtonElement>('#execution-start-btn');
-const executionStopButton = getRequiredElement<HTMLButtonElement>('#execution-stop-btn');
-const executionPrevButton = getRequiredElement<HTMLButtonElement>('#execution-prev-btn');
-const executionPlayButton = getRequiredElement<HTMLButtonElement>('#execution-play-btn');
-const executionNextButton = getRequiredElement<HTMLButtonElement>('#execution-next-btn');
-const executionStatus = getRequiredElement<HTMLElement>('#execution-status');
-const executionNodeState = getRequiredElement<HTMLElement>('#execution-node-state');
-const editCreateModule = getRequiredElement<HTMLSelectElement>('#edit-create-module');
-const editCreateName = getRequiredElement<HTMLInputElement>('#edit-create-name');
-const editCreateInputs = getRequiredElement<HTMLInputElement>('#edit-create-inputs');
-const editCreateOutputs = getRequiredElement<HTMLInputElement>('#edit-create-outputs');
-const editCreateButton = getRequiredElement<HTMLButtonElement>('#edit-create-btn');
-const editConnectSource = getRequiredElement<HTMLSelectElement>('#edit-connect-source');
-const editConnectTarget = getRequiredElement<HTMLSelectElement>('#edit-connect-target');
-const editConnectButton = getRequiredElement<HTMLButtonElement>('#edit-connect-btn');
-const editRenameName = getRequiredElement<HTMLInputElement>('#edit-rename-name');
-const editRenameButton = getRequiredElement<HTMLButtonElement>('#edit-rename-btn');
-const editMoveModule = getRequiredElement<HTMLSelectElement>('#edit-move-module');
-const editMoveButton = getRequiredElement<HTMLButtonElement>('#edit-move-btn');
-const graphEditStatus = getRequiredElement<HTMLElement>('#graph-edit-status');
-const nodeInspector = getRequiredElement<HTMLElement>('#node-inspector');
-const openSourceButton = getRequiredElement<HTMLButtonElement>('#open-source-btn');
-const flowMinLength = getRequiredElement<HTMLSelectElement>('#flow-min-length');
-const flowConfidence = getRequiredElement<HTMLInputElement>('#flow-confidence');
-const flowConfidenceValue = getRequiredElement<HTMLElement>('#flow-confidence-value');
-const flowModule = getRequiredElement<HTMLSelectElement>('#flow-module');
-const flowClearButton = getRequiredElement<HTMLButtonElement>('#flow-clear-btn');
 const flowList = getRequiredElement<HTMLUListElement>('#flow-list');
 const flowSteps = getRequiredElement<HTMLOListElement>('#flow-steps');
-const flowPrevButton = getRequiredElement<HTMLButtonElement>('#flow-prev-btn');
-const flowPlayButton = getRequiredElement<HTMLButtonElement>('#flow-play-btn');
-const flowNextButton = getRequiredElement<HTMLButtonElement>('#flow-next-btn');
-const flowExplain = getRequiredElement<HTMLElement>('#flow-explain');
+const nodeInspector = getRequiredElement<HTMLElement>('#node-inspector');
+const openSourceButton = getRequiredElement<HTMLButtonElement>('#open-source-btn');
+const maxDepthSlider = getRequiredElement<HTMLInputElement>('#max-depth');
+const maxDepthValue = getRequiredElement<HTMLElement>('#max-depth-value');
+const moduleFilter = getRequiredElement<HTMLSelectElement>('#module-filter');
 const layoutButton = getRequiredElement<HTMLButtonElement>('#layout-btn');
-const viewModeButton = getRequiredElement<HTMLButtonElement>('#view-mode-btn');
 const fitButton = getRequiredElement<HTMLButtonElement>('#fit-btn');
-const zoomOutButton = getRequiredElement<HTMLButtonElement>('#zoom-out-btn');
-const zoomResetButton = getRequiredElement<HTMLButtonElement>('#zoom-reset-btn');
-const zoomInButton = getRequiredElement<HTMLButtonElement>('#zoom-in-btn');
 const refreshButton = getRequiredElement<HTMLButtonElement>('#refresh-btn');
-const advancedNavigationPanel = getRequiredElement<HTMLElement>('#advanced-navigation-panel');
-const explorePanel = getRequiredElement<HTMLElement>('#explore-panel');
-const exploreAdvancedScope = getRequiredElement<HTMLElement>('#explore-advanced-scope');
-const nodeInspectorPanel = getRequiredElement<HTMLElement>('#node-inspector-panel');
-const layerPanel = getRequiredElement<HTMLElement>('#layer-panel');
-const abstractionPanel = getRequiredElement<HTMLElement>('#abstraction-panel');
-const reductionPanel = getRequiredElement<HTMLElement>('#reduction-panel');
-const executionPanel = getRequiredElement<HTMLElement>('#execution-panel');
-const graphEditPanel = getRequiredElement<HTMLElement>('#graph-edit-panel');
-const callPathPanel = getRequiredElement<HTMLElement>('#callpath-panel');
-const dataFlowPanel = getRequiredElement<HTMLElement>('#dataflow-panel');
-const flowControlsPanel = getRequiredElement<HTMLElement>('#flow-controls-panel');
-const flowStepsPanel = getRequiredElement<HTMLElement>('#flow-steps-panel');
-let currentLayoutMode: LayoutMode = 'clustered';
+
+let cy: cytoscape.Core | undefined;
 let latestGraphData: GraphData | undefined;
-let latestDisplayedGraphData: GraphData | undefined;
-let hasInitializedViewport = false;
-let minimapUpdateRequested = false;
-let minimapTransform: MinimapTransform | undefined;
-let flowDefinitions: FlowDefinition[] = [];
+let currentLayoutMode: LayoutMode = 'vertical';
 let selectedFlowId: string | undefined;
-let selectedStepIndex: number | undefined;
 let selectedNodeId: string | undefined;
-let guidedModeEnabled = true;
-let playbackTimer: number | undefined;
-let isPlaybackRunning = false;
-let executionPlaybackTimer: number | undefined;
-let isExecutionPlaybackRunning = false;
-let executionTraceRunning = false;
-let executionCursor = -1;
-const executionEvents: ExecutionTraceEvent[] = [];
-const dynamicExecutionEdgeIds = new Set<string>();
-const latestExecutionEventByNodeId = new Map<string, ExecutionTraceEvent>();
+let flows: FlowDefinition[] = [];
+
 const nodeCatalog = new Map<string, GraphNode>();
-const callEdgeByPair = new Map<string, string>();
-const anyEdgeByPair = new Map<string, string>();
 const edgeCatalog = new Map<string, GraphEdge>();
-const advancedPanels: HTMLElement[] = [
-  advancedNavigationPanel,
-  explorePanel,
-  exploreAdvancedScope,
-  nodeInspectorPanel,
-  layerPanel,
-  abstractionPanel,
-  reductionPanel,
-  executionPanel,
-  graphEditPanel,
-  callPathPanel,
-  dataFlowPanel,
-  flowControlsPanel,
-  flowList,
-  flowStepsPanel
-];
-
-const flowFilters: FlowFilters = {
-  minSteps: Number.parseInt(flowMinLength.value, 10) || 2,
-  minConfidence: Number.parseInt(flowConfidence.value, 10) / 100 || 0,
-  moduleId: 'all'
-};
-
-const focusFilters: FocusFilters = {
-  moduleNodeId: 'all',
-  neighborhoodOnly: false
-};
-
-const declutterState: DeclutterState = {
-  visibilityMode: (focusVisibilitySelect.value as FocusVisibilityMode) || 'dim',
-  layoutSpacing: Number.parseInt(layoutSpacing.value, 10) || 3
-};
-
-const drillTrailState: DrillTrailState = {
-  enabled: false,
-  nodeSequence: [],
-  edgeSequence: []
-};
-
-const dependencyTraversal: DependencyTraversalState = {
-  direction: (dependencyDirection.value as DependencyDirection) || 'both',
-  maxHops: Number.parseInt(dependencyHops.value, 10) || 3
-};
-
-let latestDependencyAnalysis: DependencyAnalysisSnapshot | undefined;
-const callPathExplorer: CallPathExplorerState = {
-  enabled: false,
-  entryNodeId: '',
-  maxDepth: Number.parseInt(callPathDepth.value, 10) || 8
-};
-
-const dataFlowExplorer: DataFlowExplorerState = {
-  enabled: false,
-  sourceNodeId: '',
-  direction: (dataFlowDirection.value as DataFlowDirection) || 'forward',
-  maxHops: Number.parseInt(dataFlowHops.value, 10) || 4
-};
-
-const journeyState: JourneyState = {
-  enabled: false,
-  mode: (journeyModeSelect.value as JourneyMode) || 'file',
-  entryNodeId: '',
-  nodeIds: [],
-  edgeIds: [],
-  currentIndex: 0
-};
-
-let latestDataFlowAnalysis: DataFlowAnalysisSnapshot | undefined;
-const graphAbstraction: GraphAbstractionState = {
-  manualLevel: (abstractionLevelSelect.value as AbstractionLevel) || 'function',
-  autoByZoom: abstractionAutoToggle.checked,
-  effectiveLevel: (abstractionLevelSelect.value as AbstractionLevel) || 'function'
-};
-
-const reductionState: ReductionState = {
-  collapseInternalFunctions: collapseFunctionsToggle.checked,
-  collapseLibraries: collapseLibrariesToggle.checked,
-  expandedModuleIds: new Set<string>(),
-  librariesExpanded: false
-};
-
-const layerVisibility: LayerVisibility = {
-  structural: layerStructuralToggle.checked,
-  dependency: layerDependencyToggle.checked,
-  dataflow: layerDataFlowToggle.checked,
-  execution: layerExecutionToggle.checked
-};
-
-const COLLAPSED_LIBRARIES_NODE_ID = 'module:external:collapsed';
-
-const MIN_ZOOM = 0.2;
-const MAX_ZOOM = 2.4;
-
-const graph = cytoscape({
-  container: graphContainer,
-  elements: [],
-  minZoom: MIN_ZOOM,
-  maxZoom: MAX_ZOOM,
-  userZoomingEnabled: true,
-  userPanningEnabled: true,
-  layout: {
-    name: 'grid'
-  },
-  wheelSensitivity: 0.07,
-  style: [
-    {
-      selector: 'node',
-      style: {
-        label: 'data(label)',
-        'font-size': 11,
-        color: '#f6f7f8',
-        'text-wrap': 'wrap',
-        'text-max-width': '150px',
-        'background-color': '#3a5a40',
-        'text-valign': 'center',
-        'text-halign': 'center',
-        width: 'label',
-        height: 'label',
-        padding: '16px',
-        'border-width': 1,
-        'border-color': '#a3b18a'
-      }
-    },
-    {
-      selector: 'node.dimmed',
-      style: {
-        opacity: 0.16,
-        'text-opacity': 0.2
-      }
-    },
-    {
-      selector: 'node.hidden-by-scope',
-      style: {
-        display: 'none'
-      }
-    },
-    {
-      selector: 'node.flow-node',
-      style: {
-        opacity: 1,
-        'text-opacity': 1,
-        'border-width': 2,
-        'border-color': '#7ae582'
-      }
-    },
-    {
-      selector: 'node.flow-current',
-      style: {
-        'border-width': 3,
-        'border-color': '#f4a261'
-      }
-    },
-    {
-      selector: 'node[reductionCollapsed = 1]',
-      style: {
-        'border-style': 'dashed',
-        'border-width': 2,
-        'border-color': '#9cbf7c'
-      }
-    },
-    {
-      selector: 'node.node-selected',
-      style: {
-        'border-width': 3,
-        'border-color': '#57cc99',
-        'text-opacity': 1,
-        opacity: 1
-      }
-    },
-    {
-      selector: 'node.node-incoming',
-      style: {
-        'border-width': 2,
-        'border-color': '#4cc9f0',
-        opacity: 1,
-        'text-opacity': 1
-      }
-    },
-    {
-      selector: 'node.node-outgoing',
-      style: {
-        'border-width': 2,
-        'border-color': '#f4a261',
-        opacity: 1,
-        'text-opacity': 1
-      }
-    },
-    {
-      selector: 'node.node-impact',
-      style: {
-        'border-width': 3,
-        'border-color': '#ff4d6d',
-        opacity: 1,
-        'text-opacity': 1
-      }
-    },
-    {
-      selector: 'node.node-dataflow',
-      style: {
-        'border-width': 3,
-        'border-color': '#80ed99',
-        opacity: 1,
-        'text-opacity': 1
-      }
-    },
-    {
-      selector: 'node.execution-visited',
-      style: {
-        'border-width': 2,
-        'border-color': '#f94144',
-        opacity: 1,
-        'text-opacity': 1
-      }
-    },
-    {
-      selector: 'node.execution-active',
-      style: {
-        'border-width': 4,
-        'border-color': '#ff9f1c',
-        'overlay-color': '#ff9f1c',
-        'overlay-opacity': 0.12
-      }
-    },
-    {
-      selector: 'node[type = "function"]',
-      style: {
-        shape: 'roundrectangle',
-        'background-color': '#4f772d',
-        'border-color': '#cfe1b9'
-      }
-    },
-    {
-      selector: 'node[type = "module"]',
-      style: {
-        shape: 'ellipse',
-        'background-color': '#1b4332',
-        'border-color': '#95d5b2'
-      }
-    },
-    {
-      selector: 'node[type = "class"]',
-      style: {
-        shape: 'round-hexagon',
-        'background-color': '#264653',
-        'border-color': '#8ecae6'
-      }
-    },
-    {
-      selector: 'node[type = "variable"]',
-      style: {
-        shape: 'rectangle',
-        'background-color': '#606c38',
-        'border-color': '#ccd5ae'
-      }
-    },
-    {
-      selector: 'node[external = 1]',
-      style: {
-        'background-color': '#6c757d',
-        'border-color': '#ced4da'
-      }
-    },
-    {
-      selector: 'edge',
-      style: {
-        width: 1.5,
-        'line-color': '#a8b0b8',
-        'curve-style': 'unbundled-bezier',
-        'target-arrow-shape': 'triangle',
-        'target-arrow-color': '#a8b0b8',
-        'arrow-scale': 0.7,
-        opacity: 0.75
-      }
-    },
-    {
-      selector: 'edge.dimmed',
-      style: {
-        opacity: 0.06
-      }
-    },
-    {
-      selector: 'edge.hidden-by-scope',
-      style: {
-        display: 'none'
-      }
-    },
-    {
-      selector: 'edge.flow-edge',
-      style: {
-        width: 2.4,
-        opacity: 0.95,
-        'line-color': '#f4a261',
-        'target-arrow-color': '#f4a261'
-      }
-    },
-    {
-      selector: 'edge.flow-current-edge',
-      style: {
-        width: 3.3,
-        opacity: 1,
-        'line-color': '#ffd166',
-        'target-arrow-color': '#ffd166'
-      }
-    },
-    {
-      selector: 'edge.edge-incoming',
-      style: {
-        width: 2.8,
-        opacity: 1,
-        'line-color': '#4cc9f0',
-        'target-arrow-color': '#4cc9f0'
-      }
-    },
-    {
-      selector: 'edge.edge-outgoing',
-      style: {
-        width: 2.8,
-        opacity: 1,
-        'line-color': '#f4a261',
-        'target-arrow-color': '#f4a261'
-      }
-    },
-    {
-      selector: 'edge.edge-impact',
-      style: {
-        width: 3,
-        opacity: 1,
-        'line-color': '#ff4d6d',
-        'target-arrow-color': '#ff4d6d'
-      }
-    },
-    {
-      selector: 'edge.edge-dataflow',
-      style: {
-        width: 2.9,
-        opacity: 1,
-        'line-color': '#80ed99',
-        'target-arrow-color': '#80ed99'
-      }
-    },
-    {
-      selector: 'edge.execution-traversed',
-      style: {
-        width: 3.1,
-        opacity: 1,
-        'line-color': '#f94144',
-        'target-arrow-color': '#f94144'
-      }
-    },
-    {
-      selector: 'edge[type = "call"]',
-      style: {
-        'line-color': '#f4a261',
-        'target-arrow-color': '#f4a261'
-      }
-    },
-    {
-      selector: 'edge[type = "dependency"]',
-      style: {
-        'line-style': 'dashed',
-        'line-color': '#84a59d',
-        'target-arrow-color': '#84a59d'
-      }
-    },
-    {
-      selector: 'edge[type = "class-usage"]',
-      style: {
-        width: 1.8,
-        'line-style': 'dotted',
-        'line-color': '#5dade2',
-        'target-arrow-color': '#5dade2'
-      }
-    },
-    {
-      selector: 'edge[type = "dataflow"]',
-      style: {
-        width: 1.8,
-        'line-style': 'solid',
-        'line-color': '#90be6d',
-        'target-arrow-color': '#90be6d'
-      }
-    },
-    {
-      selector: 'edge[type = "execution-path"]',
-      style: {
-        width: 2.2,
-        'line-style': 'dashed',
-        'line-color': '#f94144',
-        'target-arrow-color': '#f94144'
-      }
-    },
-    {
-      selector: 'edge[type = "contains"]',
-      style: {
-        width: 1,
-        'line-style': 'solid',
-        'line-color': '#52796f',
-        'target-arrow-shape': 'none',
-        opacity: 0.22
-      }
-    },
-    {
-      selector: 'node.trail-node',
-      style: {
-        'border-width': 3,
-        'border-color': '#ef233c',
-        'overlay-color': '#ef233c',
-        'overlay-opacity': 0.08,
-        opacity: 1,
-        'text-opacity': 1
-      }
-    },
-    {
-      selector: 'node.trail-head',
-      style: {
-        'border-width': 4,
-        'border-color': '#ff006e',
-        'overlay-color': '#ff006e',
-        'overlay-opacity': 0.12
-      }
-    },
-    {
-      selector: 'edge.trail-edge',
-      style: {
-        width: 3.2,
-        opacity: 1,
-        'line-color': '#ef233c',
-        'target-arrow-color': '#ef233c',
-        'line-style': 'solid'
-      }
-    },
-    {
-      selector: 'edge.trail-head-edge',
-      style: {
-        width: 4,
-        opacity: 1,
-        'line-color': '#ff006e',
-        'target-arrow-color': '#ff006e'
-      }
-    }
-  ]
-});
-
-graph.on('tap', 'node', (event: cytoscape.EventObject) => {
-  const node = event.target;
-  const previousNodeId = selectedNodeId;
-  const nodeId = node.id();
-  selectedNodeId = nodeId;
-  recordDrillSelection(previousNodeId, nodeId);
-
-  if (journeyState.enabled) {
-    const nextIndex = journeyState.nodeIds.indexOf(nodeId);
-    if (nextIndex >= 0) {
-      journeyState.currentIndex = nextIndex;
-      updateJourneyUi();
-    }
-  }
-
-  const selectedNode = nodeCatalog.get(nodeId);
-  if (selectedNode) {
-    editRenameName.value = selectedNode.name;
-    if (selectedNode.type === 'function') {
-      editConnectSource.value = selectedNode.id;
-      callPathEntry.value = selectedNode.id;
-      callPathExplorer.entryNodeId = selectedNode.id;
-      graphEditStatus.textContent = `Selected function ${selectedNode.name} for editing.`;
-    } else {
-      graphEditStatus.textContent = `Selected ${selectedNode.type} ${selectedNode.name}.`;
-    }
-
-    if (selectedNode.layers.includes('dataflow')) {
-      dataFlowSource.value = selectedNode.id;
-      dataFlowExplorer.sourceNodeId = selectedNode.id;
-    }
-  }
-
-  const activeFlow = getSelectedFlow();
-  if (activeFlow) {
-    const stepIndex = activeFlow.nodeIds.indexOf(nodeId);
-    if (stepIndex >= 0) {
-      selectedStepIndex = stepIndex;
-      renderFlowSteps(activeFlow);
-    }
-  }
-
-  // Clicking a node should immediately open a navigable local neighborhood.
-  focusFilters.moduleNodeId = 'all';
-  focusFile.value = 'all';
-  focusFilters.neighborhoodOnly = true;
-  focusNeighborhood.checked = true;
-  dependencyTraversal.maxHops = 1;
-  dependencyHops.value = '1';
-  dependencyHopsValue.textContent = '1';
-
-  applyFlowHighlighting();
-  applyNodeDrilldownLayout(nodeId);
-});
-
-graph.on('dbltap', 'node', (event: cytoscape.EventObject) => {
-  const nodeId = event.target.id();
-  if (!nodeId) {
-    return;
-  }
-
-  if (toggleReductionExpansion(nodeId)) {
-    return;
-  }
-
-  openNodeSource(nodeId);
-});
 
 refreshButton.addEventListener('click', () => {
-  refreshButton.disabled = true;
-  statusText.textContent = 'Refreshing graph...';
   vscode.postMessage({ type: 'refreshGraph' });
 });
 
-layoutButton.addEventListener('click', () => {
-  currentLayoutMode = currentLayoutMode === 'clustered' ? 'force' : 'clustered';
-  layoutButton.textContent =
-    currentLayoutMode === 'clustered' ? 'Layout: Clustered' : 'Layout: Force';
-
-  if (latestGraphData) {
-    applyLayout(latestGraphData, true);
-  }
-});
-
-viewModeButton.addEventListener('click', () => {
-  setGuidedMode(!guidedModeEnabled, true);
-});
-
 fitButton.addEventListener('click', () => {
-  fitGraphToCurrentView();
-  updateNavigationStatus('Fit applied to current graph scope.');
+  cy?.fit(undefined, 24);
 });
 
-zoomInButton.addEventListener('click', () => {
-  zoomByFactor(1.16);
+layoutButton.addEventListener('click', () => {
+  currentLayoutMode = currentLayoutMode === 'vertical' ? 'force' : 'vertical';
+  layoutButton.textContent =
+    currentLayoutMode === 'vertical' ? 'Layout: Top to Bottom' : 'Layout: Force Directed';
+  applyLayout();
 });
 
-zoomOutButton.addEventListener('click', () => {
-  zoomByFactor(1 / 1.16);
+maxDepthSlider.addEventListener('input', () => {
+  maxDepthValue.textContent = maxDepthSlider.value;
+  recomputeFlows();
 });
 
-zoomResetButton.addEventListener('click', () => {
-  graph.zoom({
-    level: 1,
-    renderedPosition: { x: graph.width() / 2, y: graph.height() / 2 }
-  });
-  updateZoomResetLabel();
-  updateNavigationStatus('Zoom reset to 100%.');
-});
-
-navigationOverviewButton.addEventListener('click', () => {
-  applyOverviewMode();
-});
-
-navigationFollowSelectionButton.addEventListener('click', () => {
-  followCurrentSelection();
-});
-
-navigationResetButton.addEventListener('click', () => {
-  resetNavigationState();
-});
-
-journeyModeSelect.addEventListener('change', () => {
-  const mode = journeyModeSelect.value;
-  if (mode !== 'file' && mode !== 'code') {
-    return;
-  }
-
-  journeyState.mode = mode;
-  journeyState.enabled = false;
-  journeyState.nodeIds = [];
-  journeyState.edgeIds = [];
-  journeyState.currentIndex = 0;
-
-  if (latestGraphData) {
-    syncJourneyEntryOptions(latestGraphData);
-
-    if (mode === 'code') {
-      const selectedNode = selectedNodeId ? nodeCatalog.get(selectedNodeId) : undefined;
-      const selectedModuleId = selectedNode ? thisNodeModuleId(selectedNode) : undefined;
-      const seededEntry = selectedModuleId
-        ? findPreferredFunctionEntryForModule(latestGraphData, selectedModuleId)
-        : undefined;
-
-      if (seededEntry) {
-        journeyEntrySelect.value = seededEntry;
-        journeyState.entryNodeId = seededEntry;
-      }
-    }
-  }
-
-  updateJourneyUi(`Mode switched to ${mode === 'file' ? 'File Flow' : 'Code Flow'}. Choose an entry.`);
-  applyFlowHighlighting();
-});
-
-journeyEntrySelect.addEventListener('change', () => {
-  journeyState.entryNodeId = journeyEntrySelect.value;
-  updateJourneyUi();
-});
-
-journeyStartButton.addEventListener('click', () => {
-  clearDrillTrail();
-  startJourney();
-});
-
-journeyPrevButton.addEventListener('click', () => {
-  stepJourney(-1);
-});
-
-journeyNextButton.addEventListener('click', () => {
-  stepJourney(1);
-});
-
-journeyClearButton.addEventListener('click', () => {
-  clearJourney('Journey cleared. Pick an entry to start again.');
-  applyFlowHighlighting();
-});
-
-flowList.addEventListener('click', (event) => {
-  clearJourney();
-  clearDrillTrail();
-  const target = event.target as HTMLElement | null;
-  const button = target?.closest<HTMLButtonElement>('button[data-flow-id]');
-  if (!button) {
-    return;
-  }
-
-  const nextFlowId = button.dataset.flowId;
-  if (!nextFlowId) {
-    return;
-  }
-
-  stopPlayback();
-  selectedFlowId = nextFlowId;
-  selectedStepIndex = 0;
-  renderFlowSidebar();
-  applyFlowHighlighting();
-
-  const activeFlow = getSelectedFlow();
-  if (activeFlow && activeFlow.nodeIds.length > 0) {
-    focusNode(activeFlow.nodeIds[0], true);
-  }
-});
-
-flowSteps.addEventListener('click', (event) => {
-  const target = event.target as HTMLElement | null;
-  const button = target?.closest<HTMLButtonElement>('button[data-step-index]');
-  if (!button) {
-    return;
-  }
-
-  const stepIndexText = button.dataset.stepIndex;
-  if (!stepIndexText) {
-    return;
-  }
-
-  const stepIndex = Number.parseInt(stepIndexText, 10);
-  if (!Number.isFinite(stepIndex)) {
-    return;
-  }
-
-  const activeFlow = getSelectedFlow();
-  if (!activeFlow || stepIndex < 0 || stepIndex >= activeFlow.nodeIds.length) {
-    return;
-  }
-
-  selectedStepIndex = stepIndex;
-  renderFlowSteps(activeFlow);
-  applyFlowHighlighting();
-  focusNode(activeFlow.nodeIds[stepIndex], true);
-});
-
-flowMinLength.addEventListener('change', () => {
-  flowFilters.minSteps = Number.parseInt(flowMinLength.value, 10) || 1;
-  applyFlowFilters();
-});
-
-flowConfidence.addEventListener('input', () => {
-  const value = Number.parseInt(flowConfidence.value, 10);
-  flowFilters.minConfidence = Number.isFinite(value) ? value / 100 : 0;
-  flowConfidenceValue.textContent = `${Math.round(flowFilters.minConfidence * 100)}%`;
-  applyFlowFilters();
-});
-
-flowModule.addEventListener('change', () => {
-  flowFilters.moduleId = flowModule.value;
-  applyFlowFilters();
-});
-
-flowClearButton.addEventListener('click', () => {
-  stopPlayback();
-  selectedFlowId = undefined;
-  selectedStepIndex = undefined;
-  selectedNodeId = undefined;
-  renderFlowSidebar();
-  applyFlowHighlighting();
-});
-
-focusFile.addEventListener('change', () => {
-  focusFilters.moduleNodeId = focusFile.value;
-  applyFlowHighlighting();
-});
-
-focusNeighborhood.addEventListener('change', () => {
-  focusFilters.neighborhoodOnly = focusNeighborhood.checked;
-  applyFlowHighlighting();
-});
-
-dependencyDirection.addEventListener('change', () => {
-  const value = dependencyDirection.value;
-  if (value === 'upstream' || value === 'downstream' || value === 'both') {
-    dependencyTraversal.direction = value;
-  }
-  applyFlowHighlighting();
-});
-
-dependencyHops.addEventListener('input', () => {
-  const value = Number.parseInt(dependencyHops.value, 10);
-  dependencyTraversal.maxHops = Number.isFinite(value) ? clamp(value, 1, 8) : 3;
-  dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
-  applyFlowHighlighting();
-});
-
-focusVisibilitySelect.addEventListener('change', () => {
-  const mode = focusVisibilitySelect.value;
-  if (mode === 'dim' || mode === 'hide') {
-    declutterState.visibilityMode = mode;
-  }
-  applyFlowHighlighting();
-});
-
-layoutSpacing.addEventListener('input', () => {
-  const value = Number.parseInt(layoutSpacing.value, 10);
-  declutterState.layoutSpacing = Number.isFinite(value) ? clamp(value, 1, 5) : 3;
-  layoutSpacingValue.textContent = String(declutterState.layoutSpacing);
-  rerenderGraphFromSource();
-});
-
-callPathEntry.addEventListener('change', () => {
-  callPathExplorer.entryNodeId = callPathEntry.value;
-  if (callPathExplorer.enabled) {
-    applyFlowFilters();
-  }
-});
-
-callPathDepth.addEventListener('input', () => {
-  const value = Number.parseInt(callPathDepth.value, 10);
-  callPathExplorer.maxDepth = Number.isFinite(value) ? clamp(value, 2, 14) : 8;
-  callPathDepthValue.textContent = String(callPathExplorer.maxDepth);
-  if (callPathExplorer.enabled) {
-    applyFlowFilters();
-  }
-});
-
-callPathRunButton.addEventListener('click', () => {
-  clearJourney();
-  clearDrillTrail();
-  callPathExplorer.entryNodeId = callPathEntry.value;
-  if (!callPathExplorer.entryNodeId) {
-    callPathStatus.textContent = 'Select an entry function to explore call paths.';
-    return;
-  }
-
-  callPathExplorer.enabled = true;
-  applyFlowFilters();
-});
-
-callPathClearButton.addEventListener('click', () => {
-  callPathExplorer.enabled = false;
-  callPathStatus.textContent = 'Auto mode: discovering broad flow patterns.';
-  applyFlowFilters();
-});
-
-dataFlowSource.addEventListener('change', () => {
-  dataFlowExplorer.sourceNodeId = dataFlowSource.value;
-  if (dataFlowExplorer.enabled) {
-    applyFlowHighlighting();
-  }
-});
-
-dataFlowDirection.addEventListener('change', () => {
-  const value = dataFlowDirection.value;
-  if (value === 'forward' || value === 'backward' || value === 'both') {
-    dataFlowExplorer.direction = value;
-  }
-  if (dataFlowExplorer.enabled) {
-    applyFlowHighlighting();
-  }
-});
-
-dataFlowHops.addEventListener('input', () => {
-  const value = Number.parseInt(dataFlowHops.value, 10);
-  dataFlowExplorer.maxHops = Number.isFinite(value) ? clamp(value, 1, 10) : 4;
-  dataFlowHopsValue.textContent = String(dataFlowExplorer.maxHops);
-  if (dataFlowExplorer.enabled) {
-    applyFlowHighlighting();
-  }
-});
-
-dataFlowRunButton.addEventListener('click', () => {
-  clearJourney();
-  clearDrillTrail();
-  dataFlowExplorer.sourceNodeId = dataFlowSource.value || selectedNodeId || '';
-  if (!dataFlowExplorer.sourceNodeId) {
-    dataFlowStatus.textContent = 'Select a source node to trace data flow.';
-    return;
-  }
-
-  if (!dataFlowSource.value && dataFlowExplorer.sourceNodeId) {
-    dataFlowSource.value = dataFlowExplorer.sourceNodeId;
-  }
-
-  dataFlowExplorer.enabled = true;
-  applyFlowHighlighting();
-});
-
-dataFlowClearButton.addEventListener('click', () => {
-  dataFlowExplorer.enabled = false;
-  latestDataFlowAnalysis = undefined;
-  dataFlowStatus.textContent = 'Select a source node to trace data transformations.';
-  applyFlowHighlighting();
-});
-
-focusClearButton.addEventListener('click', () => {
-  clearJourney('Journey cleared.');
-  clearDrillTrail();
-  selectedNodeId = undefined;
-  focusFilters.moduleNodeId = 'all';
-  focusFilters.neighborhoodOnly = false;
-  focusFile.value = 'all';
-  focusNeighborhood.checked = false;
-  applyFlowHighlighting();
-});
-
-layerStructuralToggle.addEventListener('change', () => {
-  layerVisibility.structural = layerStructuralToggle.checked;
-  rerenderGraphFromSource();
-});
-
-layerDependencyToggle.addEventListener('change', () => {
-  layerVisibility.dependency = layerDependencyToggle.checked;
-  rerenderGraphFromSource();
-});
-
-layerDataFlowToggle.addEventListener('change', () => {
-  layerVisibility.dataflow = layerDataFlowToggle.checked;
-  rerenderGraphFromSource();
-});
-
-layerExecutionToggle.addEventListener('change', () => {
-  layerVisibility.execution = layerExecutionToggle.checked;
-  rerenderGraphFromSource();
-});
-
-abstractionLevelSelect.addEventListener('change', () => {
-  const level = abstractionLevelSelect.value;
-  if (level === 'system' || level === 'function' || level === 'detail') {
-    graphAbstraction.manualLevel = level;
-  }
-
-  if (!graphAbstraction.autoByZoom) {
-    graphAbstraction.effectiveLevel = graphAbstraction.manualLevel;
-  }
-
-  updateAbstractionStatus();
-  rerenderGraphFromSource();
-});
-
-abstractionAutoToggle.addEventListener('change', () => {
-  graphAbstraction.autoByZoom = abstractionAutoToggle.checked;
-  syncAbstractionLevelFromZoom(true);
-});
-
-executionStartButton.addEventListener('click', () => {
-  if (executionTraceRunning) {
-    return;
-  }
-
-  executionStatus.textContent = 'Starting runtime trace...';
-  vscode.postMessage({ type: 'startExecutionTrace' });
-});
-
-executionStopButton.addEventListener('click', () => {
-  vscode.postMessage({ type: 'stopExecutionTrace' });
-});
-
-executionPrevButton.addEventListener('click', () => {
-  stepExecution(-1);
-});
-
-executionNextButton.addEventListener('click', () => {
-  stepExecution(1);
-});
-
-executionPlayButton.addEventListener('click', () => {
-  if (isExecutionPlaybackRunning) {
-    stopExecutionPlayback();
-    return;
-  }
-
-  startExecutionPlayback();
-});
-
-editCreateButton.addEventListener('click', () => {
-  const moduleNodeId = editCreateModule.value;
-  const functionName = editCreateName.value.trim();
-
-  if (!moduleNodeId || !functionName) {
-    graphEditStatus.textContent = 'Create failed: module and function name are required.';
-    return;
-  }
-
-  vscode.postMessage({
-    type: 'createGraphFunction',
-    moduleNodeId,
-    functionName,
-    inputs: parseCsvValues(editCreateInputs.value),
-    outputs: parseCsvValues(editCreateOutputs.value)
-  });
-  graphEditStatus.textContent = `Creating ${functionName}...`;
-});
-
-editConnectButton.addEventListener('click', () => {
-  const sourceNodeId = editConnectSource.value;
-  const targetNodeId = editConnectTarget.value;
-
-  if (!sourceNodeId || !targetNodeId) {
-    graphEditStatus.textContent = 'Connect failed: source and target functions are required.';
-    return;
-  }
-
-  if (sourceNodeId === targetNodeId) {
-    graphEditStatus.textContent = 'Connect failed: source and target must be different nodes.';
-    return;
-  }
-
-  vscode.postMessage({
-    type: 'connectGraphNodes',
-    sourceNodeId,
-    targetNodeId
-  });
-  graphEditStatus.textContent = 'Generating call edge in code...';
-});
-
-editRenameButton.addEventListener('click', () => {
-  const newName = editRenameName.value.trim();
-  if (!selectedNodeId) {
-    graphEditStatus.textContent = 'Rename failed: select a node in the graph first.';
-    return;
-  }
-
-  if (!newName) {
-    graphEditStatus.textContent = 'Rename failed: enter a new node name.';
-    return;
-  }
-
-  vscode.postMessage({
-    type: 'renameGraphNode',
-    nodeId: selectedNodeId,
-    newName
-  });
-  graphEditStatus.textContent = `Renaming selected node to ${newName}...`;
-});
-
-editMoveButton.addEventListener('click', () => {
-  const targetModuleNodeId = editMoveModule.value;
-  if (!selectedNodeId) {
-    graphEditStatus.textContent = 'Move failed: select a function node first.';
-    return;
-  }
-
-  if (!targetModuleNodeId) {
-    graphEditStatus.textContent = 'Move failed: choose a target module.';
-    return;
-  }
-
-  vscode.postMessage({
-    type: 'moveGraphNode',
-    nodeId: selectedNodeId,
-    targetModuleNodeId
-  });
-  graphEditStatus.textContent = 'Moving selected function to target module...';
-});
-
-collapseFunctionsToggle.addEventListener('change', () => {
-  reductionState.collapseInternalFunctions = collapseFunctionsToggle.checked;
-  if (!reductionState.collapseInternalFunctions) {
-    reductionState.expandedModuleIds.clear();
-  }
-
-  updateReductionHint();
-  rerenderGraphFromSource();
-});
-
-collapseLibrariesToggle.addEventListener('change', () => {
-  reductionState.collapseLibraries = collapseLibrariesToggle.checked;
-  if (!reductionState.collapseLibraries) {
-    reductionState.librariesExpanded = false;
-  }
-
-  updateReductionHint();
-  rerenderGraphFromSource();
+moduleFilter.addEventListener('change', () => {
+  recomputeFlows();
 });
 
 openSourceButton.addEventListener('click', () => {
@@ -1352,3962 +110,591 @@ openSourceButton.addEventListener('click', () => {
     return;
   }
 
-  openNodeSource(selectedNodeId);
-});
-
-flowPrevButton.addEventListener('click', () => {
-  const flow = getSelectedFlow();
-  if (!flow || flow.nodeIds.length === 0) {
+  const node = nodeCatalog.get(selectedNodeId);
+  if (!node || !node.filePath || typeof node.line !== 'number') {
     return;
   }
 
-  const currentIndex = typeof selectedStepIndex === 'number' ? selectedStepIndex : 0;
-  selectedStepIndex = Math.max(currentIndex - 1, 0);
-  renderFlowSteps(flow);
-  applyFlowHighlighting();
-  focusNode(flow.nodeIds[selectedStepIndex], true);
-});
-
-flowNextButton.addEventListener('click', () => {
-  advanceStep();
-});
-
-flowPlayButton.addEventListener('click', () => {
-  if (isPlaybackRunning) {
-    stopPlayback();
-    return;
-  }
-
-  startPlayback();
-});
-
-graph.on('zoom', () => {
-  updateZoomResetLabel();
-  syncAbstractionLevelFromZoom(false);
-  scheduleMinimapRender();
-});
-
-graph.on('pan', () => {
-  scheduleMinimapRender();
+  vscode.postMessage({ type: 'navigateToNode', nodeId: node.id });
 });
 
 window.addEventListener('resize', () => {
-  graph.resize();
-  updateZoomResetLabel();
-  scheduleMinimapRender();
-});
-
-window.addEventListener('keydown', (event: KeyboardEvent) => {
-  if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+  if (!cy) {
     return;
   }
 
-  if (isTypingContext(event.target)) {
-    return;
-  }
-
-  const key = event.key.toLowerCase();
-  if (key === 'o') {
-    event.preventDefault();
-    applyOverviewMode();
-    return;
-  }
-
-  if (key === 'f') {
-    event.preventDefault();
-    graph.fit(graph.elements(), 80);
-    updateZoomResetLabel();
-    scheduleMinimapRender();
-    updateNavigationStatus('Fit applied to current graph scope.');
-    return;
-  }
-
-  if (key === '0') {
-    event.preventDefault();
-    graph.zoom({
-      level: 1,
-      renderedPosition: { x: graph.width() / 2, y: graph.height() / 2 }
-    });
-    updateZoomResetLabel();
-    scheduleMinimapRender();
-    updateNavigationStatus('Zoom reset to 100%.');
-    return;
-  }
-
-  if (key === 'escape') {
-    event.preventDefault();
-    selectedNodeId = undefined;
-    applyFlowHighlighting();
-    updateNavigationStatus('Selection cleared.');
-  }
-});
-
-minimapCanvas.addEventListener('pointerdown', (event: PointerEvent) => {
-  if (!minimapTransform) {
-    return;
-  }
-
-  const rect = minimapCanvas.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const y = event.clientY - rect.top;
-  const modelX = (x - minimapTransform.offsetX) / minimapTransform.scale;
-  const modelY = (y - minimapTransform.offsetY) / minimapTransform.scale;
-
-  centerGraphAtModelPoint(modelX, modelY);
+  cy.resize();
+  cy.fit(undefined, 24);
 });
 
 window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
   const message = event.data;
 
-  if (message.type === 'graphError') {
-    statusText.textContent = `Graph error: ${message.message}`;
-    refreshButton.disabled = false;
-    return;
-  }
-
-  if (message.type === 'graphData') {
-    renderGraph(message.payload);
-    refreshButton.disabled = false;
-    return;
-  }
-
-  if (message.type === 'graphEditResult') {
-    graphEditStatus.textContent = message.ok ? `Success: ${message.message}` : `Error: ${message.message}`;
-    if (message.ok) {
-      editCreateName.value = '';
-      editCreateInputs.value = '';
-      editCreateOutputs.value = '';
-      editRenameName.value = '';
-    }
-    return;
-  }
-
-  if (message.type === 'executionReset') {
-    resetExecutionTrace(message.entryFilePath);
-    return;
-  }
-
-  if (message.type === 'executionEvent') {
-    ingestExecutionEvent(message.payload);
-    return;
-  }
-
-  if (message.type === 'executionComplete') {
-    completeExecutionTrace(message.summary);
-    return;
-  }
-
-  if (message.type === 'executionError') {
-    executionStatus.textContent = `Trace error: ${message.message}`;
-    executionTraceRunning = false;
-    stopExecutionPlayback();
-    updateExecutionControls();
+  switch (message.type) {
+    case 'graphData':
+      consumeGraphData(message.payload);
+      break;
+    case 'graphError':
+      statusText.textContent = `Error: ${message.message}`;
+      break;
+    default:
+      break;
   }
 });
 
-updateZoomResetLabel();
-focusNeighborhood.checked = focusFilters.neighborhoodOnly;
-dependencyDirection.value = dependencyTraversal.direction;
-dependencyHops.value = String(dependencyTraversal.maxHops);
-dependencyHopsValue.textContent = String(dependencyTraversal.maxHops);
-focusVisibilitySelect.value = declutterState.visibilityMode;
-layoutSpacing.value = String(declutterState.layoutSpacing);
-layoutSpacingValue.textContent = String(declutterState.layoutSpacing);
-abstractionLevelSelect.value = graphAbstraction.manualLevel;
-abstractionAutoToggle.checked = graphAbstraction.autoByZoom;
-journeyModeSelect.value = journeyState.mode;
-syncAbstractionLevelFromZoom(false);
-setGuidedMode(true, false);
-updateNavigationStatus('Simple workflow active. Pick Journey mode, choose entry, then Start.');
-updateJourneyUi();
-callPathDepth.value = String(callPathExplorer.maxDepth);
-callPathDepthValue.textContent = String(callPathExplorer.maxDepth);
-dataFlowDirection.value = dataFlowExplorer.direction;
-dataFlowHops.value = String(dataFlowExplorer.maxHops);
-dataFlowHopsValue.textContent = String(dataFlowExplorer.maxHops);
-layerStructuralToggle.checked = layerVisibility.structural;
-layerDependencyToggle.checked = layerVisibility.dependency;
-layerDataFlowToggle.checked = layerVisibility.dataflow;
-layerExecutionToggle.checked = layerVisibility.execution;
-collapseFunctionsToggle.checked = reductionState.collapseInternalFunctions;
-collapseLibrariesToggle.checked = reductionState.collapseLibraries;
-updateReductionHint();
-flowConfidenceValue.textContent = `${Math.round(flowFilters.minConfidence * 100)}%`;
-updateExecutionControls();
-scheduleMinimapRender();
 vscode.postMessage({ type: 'ready' });
 
-/**
- * Rebuilds graph elements, caches node/edge lookups, and refreshes all derived UI state.
- */
-function renderGraph(graphData: GraphData): void {
+function consumeGraphData(graphData: GraphData): void {
   latestGraphData = graphData;
-  const displayedGraphData = buildDisplayedGraphData(graphData);
-  latestDisplayedGraphData = displayedGraphData;
+  rebuildCatalogs(graphData);
+  renderGraph(graphData);
+  populateModuleFilter(graphData.nodes);
+  recomputeFlows();
 
+  statusText.textContent = `Loaded ${graphData.nodes.length} nodes and ${graphData.edges.length} edges from ${graphData.meta.workspaceName}`;
+}
+
+function rebuildCatalogs(graphData: GraphData): void {
   nodeCatalog.clear();
-  callEdgeByPair.clear();
-  anyEdgeByPair.clear();
   edgeCatalog.clear();
 
-  for (const node of displayedGraphData.nodes) {
+  for (const node of graphData.nodes) {
     nodeCatalog.set(node.id, node);
   }
 
-  for (const edge of displayedGraphData.edges) {
+  for (const edge of graphData.edges) {
     edgeCatalog.set(edge.id, edge);
-    const pairKey = flowPairKey(edge.source, edge.target);
-    if (!anyEdgeByPair.has(pairKey)) {
-      anyEdgeByPair.set(pairKey, edge.id);
-    }
-
-    if (edge.type !== 'call') {
-      continue;
-    }
-
-    callEdgeByPair.set(pairKey, edge.id);
   }
-
-  drillTrailState.nodeSequence = drillTrailState.nodeSequence.filter((nodeId) => nodeCatalog.has(nodeId));
-  drillTrailState.edgeSequence = drillTrailState.edgeSequence.filter((edgeId) => edgeCatalog.has(edgeId));
-  if (drillTrailState.nodeSequence.length === 0) {
-    clearDrillTrail();
-  } else {
-    updateDrillTrailStatus();
-  }
-
-  if (selectedNodeId && !nodeCatalog.has(selectedNodeId)) {
-    selectedNodeId = undefined;
-  }
-
-  syncFocusFileOptions(graphData);
-  syncModuleFilterOptions(graphData);
-  syncGraphEditOptions(graphData);
-  syncExplorationOptions(graphData);
-  syncJourneyEntryOptions(graphData);
-
-  const elements = [
-    ...displayedGraphData.nodes.map((node) => ({
-      data: {
-        id: node.id,
-        label: formatNodeLabel(node),
-        type: node.type,
-        filePath: node.filePath,
-        line: node.line,
-        external: node.metadata?.external ? 1 : 0,
-        reductionCollapsed: node.metadata?.reductionCollapsed ? 1 : 0
-      }
-    })),
-    ...displayedGraphData.edges.map((edge) => ({
-      data: {
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        type: edge.type
-      }
-    }))
-  ];
-
-  graph.elements().remove();
-  graph.add(elements);
-
-  applyFlowFilters();
-
-  const shouldFit = !hasInitializedViewport;
-  applyLayout(displayedGraphData, shouldFit);
-  if (displayedGraphData.nodes.length > 0) {
-    hasInitializedViewport = true;
-  }
-
-  applyFlowHighlighting();
-  applyExecutionOverlay(false);
-
-  const diagnostics = graphData.meta.diagnostics;
-  const totalCalls = diagnostics.resolvedCalls + diagnostics.unresolvedCalls;
-  const relationSuffix =
-    totalCalls > 0
-      ? ` | calls: ${diagnostics.resolvedCalls}/${totalCalls} resolved`
-      : ' | calls: none';
-  const modelSuffix = ` | classes: ${diagnostics.indexedClasses} | vars: ${diagnostics.indexedVariables} | dataflow: ${diagnostics.dataFlowEdges}`;
-  const activeLayers = [
-    layerVisibility.structural ? 'S' : '',
-    layerVisibility.dependency ? 'D' : '',
-    layerVisibility.dataflow ? 'F' : '',
-    layerVisibility.execution ? 'X' : ''
-  ]
-    .filter((token) => token.length > 0)
-    .join('');
-  const layerSuffix = ` | layers: ${activeLayers || 'none'}`;
-  const abstractionSuffix = ` | abstraction: ${graphAbstraction.effectiveLevel}`;
-  const cacheTotal = diagnostics.parserCacheHits + diagnostics.parserCacheMisses;
-  const cacheSuffix =
-    cacheTotal > 0
-      ? ` | cache: ${diagnostics.parserCacheHits}/${cacheTotal}`
-      : '';
-  const warningCompact = graphData.meta.parseWarnings.length > 0 ? ' | warnings' : '';
-
-  statusText.textContent = `${graphData.meta.workspaceName} | ${displayedGraphData.nodes.length} nodes | ${displayedGraphData.edges.length} edges${relationSuffix}${modelSuffix}${layerSuffix}${abstractionSuffix}${cacheSuffix}${warningCompact}`;
-  updateJourneyUi();
 }
 
-/**
- * Renders the discovered flow list and keeps selection/playback controls in sync.
- */
-function renderFlowSidebar(): void {
-  flowMeta.textContent = `${flowDefinitions.length} discovered`;
-  flowList.replaceChildren();
+function renderGraph(graphData: GraphData): void {
+  const elements = buildCytoscapeElements(graphData);
 
-  if (flowDefinitions.length === 0) {
-    const placeholder = document.createElement('li');
-    placeholder.className = 'flow-placeholder';
-    placeholder.textContent = 'No callable flow patterns detected yet.';
-    flowList.appendChild(placeholder);
-    renderFlowSteps(undefined);
-    updatePlaybackControls();
+  if (cy) {
+    cy.destroy();
+  }
+
+  cy = cytoscape({
+    container: graphContainer,
+    elements,
+    style: [
+      {
+        selector: 'node',
+        style: {
+          label: 'data(label)',
+          'text-valign': 'center',
+          'text-halign': 'center',
+          'font-size': '11px',
+          'background-color': '#4f46e5',
+          color: '#f8fafc',
+          'text-wrap': 'wrap',
+          'text-max-width': '120px',
+          width: '26px',
+          height: '26px',
+          'overlay-padding': '6px'
+        }
+      },
+      {
+        selector: 'node[type = "module"]',
+        style: {
+          shape: 'round-rectangle',
+          width: '40px',
+          height: '28px',
+          'background-color': '#0f766e'
+        }
+      },
+      {
+        selector: 'node[type = "class"]',
+        style: {
+          shape: 'hexagon',
+          'background-color': '#b45309'
+        }
+      },
+      {
+        selector: 'node[type = "function"]',
+        style: {
+          shape: 'ellipse',
+          'background-color': '#2563eb'
+        }
+      },
+      {
+        selector: 'edge',
+        style: {
+          width: 2,
+          'curve-style': 'bezier',
+          'line-color': '#64748b',
+          'target-arrow-color': '#64748b',
+          'target-arrow-shape': 'triangle',
+          opacity: 0.9
+        }
+      },
+      {
+        selector: 'edge[type = "dependency"]',
+        style: {
+          'line-style': 'dashed',
+          'line-color': '#475569',
+          'target-arrow-color': '#475569'
+        }
+      },
+      {
+        selector: '.is-dim',
+        style: {
+          opacity: 0.12
+        }
+      },
+      {
+        selector: '.is-flow-node',
+        style: {
+          opacity: 1,
+          'border-color': '#fbbf24',
+          'border-width': 2
+        }
+      },
+      {
+        selector: '.is-flow-edge',
+        style: {
+          opacity: 1,
+          width: 3,
+          'line-color': '#f59e0b',
+          'target-arrow-color': '#f59e0b'
+        }
+      },
+      {
+        selector: '.is-selected-node',
+        style: {
+          'border-color': '#ef4444',
+          'border-width': 3
+        }
+      }
+    ],
+    layout: createLayoutOptions(currentLayoutMode)
+  });
+
+  cy.on('tap', 'node', (event) => {
+    const nodeId = event.target.id();
+    selectedNodeId = nodeId;
+    updateNodeInspector(nodeId);
+    updateOpenSourceButtonState();
+    applyFlowHighlight();
+  });
+
+  cy.on('tap', (event) => {
+    if (event.target !== cy) {
+      return;
+    }
+
+    selectedNodeId = undefined;
+    updateNodeInspector(undefined);
+    updateOpenSourceButtonState();
+    applyFlowHighlight();
+  });
+
+  cy.fit(undefined, 24);
+  applyFlowHighlight();
+}
+
+function applyLayout(): void {
+  if (!cy) {
     return;
   }
 
-  for (const [index, flow] of flowDefinitions.entries()) {
-    const item = document.createElement('li');
-    item.className = 'flow-list-item';
+  cy.layout(createLayoutOptions(currentLayoutMode)).run();
+}
 
+function createLayoutOptions(layoutMode: LayoutMode): cytoscape.LayoutOptions {
+  if (layoutMode === 'vertical') {
+    return {
+      name: 'breadthfirst',
+      directed: true,
+      fit: true,
+      padding: 24,
+      spacingFactor: 1.3,
+      animate: false
+    };
+  }
+
+  return {
+    name: 'cose',
+    fit: true,
+    padding: 24,
+    animate: false,
+    nodeRepulsion: 7500,
+    idealEdgeLength: 90
+  };
+}
+
+function buildCytoscapeElements(graphData: GraphData): cytoscape.ElementDefinition[] {
+  const nodes = graphData.nodes.filter((node) => node.type !== 'variable');
+  const nodeIds = new Set(nodes.map((node) => node.id));
+
+  const preferredEdges = graphData.edges.filter(
+    (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target) && (edge.type === 'call' || edge.type === 'dependency')
+  );
+  const fallbackEdges = graphData.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
+  const edges = preferredEdges.length > 0 ? preferredEdges : fallbackEdges;
+
+  const nodeElements = nodes.map<cytoscape.ElementDefinition>((node) => ({
+    data: {
+      id: node.id,
+      label: node.name,
+      type: node.type
+    }
+  }));
+
+  const edgeElements = edges.map<cytoscape.ElementDefinition>((edge) => ({
+    data: {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: edge.type
+    }
+  }));
+
+  return [...nodeElements, ...edgeElements];
+}
+
+function populateModuleFilter(nodes: GraphNode[]): void {
+  const previousSelection = moduleFilter.value;
+  moduleFilter.innerHTML = '';
+
+  const allOption = document.createElement('option');
+  allOption.value = 'all';
+  allOption.textContent = 'All modules';
+  moduleFilter.appendChild(allOption);
+
+  const moduleNodes = nodes
+    .filter((node) => node.type === 'module')
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const moduleNode of moduleNodes) {
+    const option = document.createElement('option');
+    option.value = moduleNode.id;
+    option.textContent = moduleNode.name;
+    moduleFilter.appendChild(option);
+  }
+
+  const hasPrevious = Array.from(moduleFilter.options).some((option) => option.value === previousSelection);
+  moduleFilter.value = hasPrevious ? previousSelection : 'all';
+}
+
+function recomputeFlows(): void {
+  if (!latestGraphData) {
+    return;
+  }
+
+  const maxDepth = Number.parseInt(maxDepthSlider.value, 10) || 8;
+  const moduleId = moduleFilter.value || 'all';
+  flows = extractTopToBottomFlows(latestGraphData, maxDepth, moduleId);
+
+  if (!selectedFlowId || !flows.some((flow) => flow.id === selectedFlowId)) {
+    selectedFlowId = flows[0]?.id;
+  }
+
+  renderFlowList();
+  renderFlowSteps(getSelectedFlow());
+  applyFlowHighlight();
+  flowMeta.textContent = `${flows.length} flow${flows.length === 1 ? '' : 's'} discovered`;
+}
+
+function extractTopToBottomFlows(graphData: GraphData, maxDepth: number, moduleId: string): FlowDefinition[] {
+  const baseNodes = graphData.nodes.filter((node) => node.type !== 'variable');
+  const baseNodeIds = new Set(baseNodes.map((node) => node.id));
+  const baseEdges = resolveFlowEdges(graphData.edges, baseNodeIds);
+
+  const scopedNodeIds = new Set<string>();
+  if (moduleId !== 'all') {
+    for (const node of baseNodes) {
+      const nodeModuleId = getModuleNodeId(node);
+      if (node.id === moduleId || nodeModuleId === moduleId) {
+        scopedNodeIds.add(node.id);
+      }
+    }
+  }
+
+  const nodes =
+    moduleId === 'all' ? baseNodes : baseNodes.filter((node) => scopedNodeIds.has(node.id));
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = baseEdges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
+
+  const outgoing = new Map<string, GraphEdge[]>();
+  const incomingCount = new Map<string, number>();
+
+  for (const node of nodes) {
+    outgoing.set(node.id, []);
+    incomingCount.set(node.id, 0);
+  }
+
+  for (const edge of edges) {
+    const next = outgoing.get(edge.source);
+    if (next) {
+      next.push(edge);
+    }
+
+    incomingCount.set(edge.target, (incomingCount.get(edge.target) ?? 0) + 1);
+  }
+
+  let roots = nodes
+    .filter((node) => (incomingCount.get(node.id) ?? 0) === 0 && (outgoing.get(node.id)?.length ?? 0) > 0)
+    .map((node) => node.id);
+
+  if (roots.length === 0) {
+    roots = nodes
+      .filter((node) => (outgoing.get(node.id)?.length ?? 0) > 0)
+      .map((node) => node.id);
+  }
+
+  const dedupe = new Set<string>();
+  const result: FlowDefinition[] = [];
+  const maxFlows = 250;
+
+  const dfs = (currentNodeId: string, pathNodeIds: string[], pathEdgeIds: string[], visited: Set<string>): void => {
+    if (result.length >= maxFlows) {
+      return;
+    }
+
+    const nextEdges = outgoing.get(currentNodeId) ?? [];
+    const reachedLimit = pathEdgeIds.length >= maxDepth;
+
+    if (nextEdges.length === 0 || reachedLimit) {
+      if (pathNodeIds.length >= 2) {
+        const key = pathNodeIds.join('>');
+        if (!dedupe.has(key)) {
+          dedupe.add(key);
+          const label = pathNodeIds
+            .map((nodeId) => nodeCatalog.get(nodeId)?.name ?? nodeId)
+            .join(' -> ');
+          result.push({
+            id: `flow-${result.length + 1}`,
+            nodeIds: [...pathNodeIds],
+            edgeIds: [...pathEdgeIds],
+            label
+          });
+        }
+      }
+      return;
+    }
+
+    for (const edge of nextEdges) {
+      if (visited.has(edge.target)) {
+        continue;
+      }
+
+      visited.add(edge.target);
+      pathNodeIds.push(edge.target);
+      pathEdgeIds.push(edge.id);
+      dfs(edge.target, pathNodeIds, pathEdgeIds, visited);
+      pathNodeIds.pop();
+      pathEdgeIds.pop();
+      visited.delete(edge.target);
+    }
+  };
+
+  for (const root of roots) {
+    const visited = new Set<string>([root]);
+    dfs(root, [root], [], visited);
+  }
+
+  return result.sort((a, b) => b.nodeIds.length - a.nodeIds.length || a.label.localeCompare(b.label));
+}
+
+function resolveFlowEdges(edges: GraphEdge[], nodeIds: Set<string>): GraphEdge[] {
+  const preferred = edges.filter(
+    (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target) && (edge.type === 'call' || edge.type === 'dependency')
+  );
+
+  if (preferred.length > 0) {
+    return preferred;
+  }
+
+  const fallback = edges.filter(
+    (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target) && edge.type !== 'contains'
+  );
+
+  return fallback.length > 0 ? fallback : edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
+}
+
+function getModuleNodeId(node: GraphNode): string | undefined {
+  if (node.type === 'module') {
+    return node.id;
+  }
+
+  const moduleNodeId = node.metadata?.moduleNodeId;
+  return typeof moduleNodeId === 'string' ? moduleNodeId : undefined;
+}
+
+function renderFlowList(): void {
+  flowList.innerHTML = '';
+
+  if (flows.length === 0) {
+    const item = document.createElement('li');
+    item.className = 'empty-state';
+    item.textContent = 'No directed flow paths found for this scope';
+    flowList.appendChild(item);
+    return;
+  }
+
+  flows.forEach((flow, index) => {
+    const item = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
-    button.dataset.flowId = flow.id;
-    button.className = `flow-button${flow.id === selectedFlowId ? ' active' : ''}`;
-    button.textContent = `${index + 1}. ${flow.name}`;
+    button.className = 'flow-item';
+
+    if (flow.id === selectedFlowId) {
+      button.classList.add('is-active');
+    }
+
+    button.textContent = `${index + 1}. ${flow.label}`;
+    button.addEventListener('click', () => {
+      selectedFlowId = flow.id;
+      selectedNodeId = flow.nodeIds[0];
+      renderFlowList();
+      renderFlowSteps(flow);
+      updateNodeInspector(selectedNodeId);
+      updateOpenSourceButtonState();
+      applyFlowHighlight();
+    });
 
     item.appendChild(button);
     flowList.appendChild(item);
-  }
-
-  renderFlowSteps(getSelectedFlow());
-  updatePlaybackControls();
+  });
 }
 
-/**
- * Renders step-by-step flow entries for the selected flow.
- */
 function renderFlowSteps(flow: FlowDefinition | undefined): void {
-  flowSteps.replaceChildren();
+  flowSteps.innerHTML = '';
 
   if (!flow) {
-    const placeholder = document.createElement('li');
-    placeholder.className = 'flow-placeholder';
-    placeholder.textContent = 'Select a flow to highlight the involved blocks.';
-    flowSteps.appendChild(placeholder);
-    renderExplainPanel(undefined);
+    const item = document.createElement('li');
+    item.className = 'empty-state';
+    item.textContent = 'Select a flow to inspect step-by-step';
+    flowSteps.appendChild(item);
     return;
   }
 
-  if (typeof selectedStepIndex !== 'number' || selectedStepIndex >= flow.nodeIds.length) {
-    selectedStepIndex = 0;
-  }
-
-  flow.nodeIds.forEach((nodeId, index) => {
+  for (const nodeId of flow.nodeIds) {
     const node = nodeCatalog.get(nodeId);
     const item = document.createElement('li');
-    item.className = 'flow-step-item';
-
     const button = document.createElement('button');
     button.type = 'button';
-    button.dataset.stepIndex = String(index);
-    button.className = `flow-step-button${index === selectedStepIndex ? ' active' : ''}`;
+    button.className = 'step-item';
+    button.textContent = node ? `${node.name} (${node.type})` : nodeId;
 
-    const label = document.createElement('span');
-    label.textContent = node?.name ?? nodeId;
+    button.addEventListener('click', () => {
+      selectedNodeId = nodeId;
+      updateNodeInspector(nodeId);
+      updateOpenSourceButtonState();
+      applyFlowHighlight();
+      const target = cy?.getElementById(nodeId);
+      if (target && target.nonempty()) {
+        cy?.animate({
+          center: { eles: target },
+          duration: 180
+        });
+      }
+    });
 
-    const order = document.createElement('span');
-    order.className = 'step-index';
-    order.textContent = String(index + 1);
-
-    button.appendChild(label);
-    button.appendChild(order);
     item.appendChild(button);
     flowSteps.appendChild(item);
-  });
-
-  renderExplainPanel(flow);
+  }
 }
 
-/**
- * Applies all active highlighting overlays for flow, focus, journey, and execution states.
- */
-function applyFlowHighlighting(): void {
-  graph.elements().removeClass(
-    'dimmed hidden-by-scope flow-node flow-edge flow-current flow-current-edge trail-node trail-edge trail-head trail-head-edge node-selected node-incoming node-outgoing node-impact node-dataflow edge-incoming edge-outgoing edge-impact edge-dataflow execution-visited execution-active execution-traversed'
-  );
-
-  const activeFlow = getSelectedFlow();
-  if (!activeFlow) {
-    applyFocusFilters();
-    applyJourneyHighlighting();
-    applyDrillTrailHighlighting();
-    renderExplainPanel(undefined);
-    updatePlaybackControls();
-    applyExecutionOverlay(false);
-    scheduleMinimapRender();
+function applyFlowHighlight(): void {
+  if (!cy) {
     return;
   }
 
-  const activeNodes = new Set(activeFlow.nodeIds);
-  const activeEdges = new Set(activeFlow.edgeIds);
+  const cyInstance = cy;
 
-  graph.nodes().forEach((node) => {
-    if (activeNodes.has(node.id())) {
-      node.addClass('flow-node');
-      return;
+  const selectedFlow = getSelectedFlow();
+  const flowNodeIds = new Set(selectedFlow?.nodeIds ?? []);
+  const flowEdgeIds = new Set(selectedFlow?.edgeIds ?? []);
+
+  cyInstance.batch(() => {
+    cyInstance.elements().removeClass('is-dim is-flow-node is-flow-edge is-selected-node');
+
+    if (selectedFlow) {
+      cyInstance.nodes().forEach((node) => {
+        if (flowNodeIds.has(node.id())) {
+          node.addClass('is-flow-node');
+        } else {
+          node.addClass('is-dim');
+        }
+      });
+
+      cyInstance.edges().forEach((edge) => {
+        if (flowEdgeIds.has(edge.id())) {
+          edge.addClass('is-flow-edge');
+        } else {
+          edge.addClass('is-dim');
+        }
+      });
     }
 
-    node.addClass('dimmed');
-  });
-
-  graph.edges().forEach((edge) => {
-    if (activeEdges.has(edge.id())) {
-      edge.addClass('flow-edge');
-      return;
-    }
-
-    edge.addClass('dimmed');
-  });
-
-  if (
-    typeof selectedStepIndex === 'number' &&
-    selectedStepIndex >= 0 &&
-    selectedStepIndex < activeFlow.nodeIds.length
-  ) {
-    const currentNodeId = activeFlow.nodeIds[selectedStepIndex];
-    graph.getElementById(currentNodeId).addClass('flow-current');
-
-    if (selectedStepIndex > 0) {
-      const currentEdgeId = activeFlow.edgeIds[selectedStepIndex - 1];
-      if (currentEdgeId) {
-        graph.getElementById(currentEdgeId).addClass('flow-current-edge');
+    if (selectedNodeId) {
+      const selectedElement = cyInstance.getElementById(selectedNodeId);
+      if (selectedElement.nonempty()) {
+        selectedElement.addClass('is-selected-node');
       }
+    }
+  });
+}
+
+function updateNodeInspector(nodeId: string | undefined): void {
+  if (!nodeId) {
+    nodeInspector.textContent = 'Select a node to inspect';
+    return;
+  }
+
+  const node = nodeCatalog.get(nodeId);
+  if (!node) {
+    nodeInspector.textContent = 'Node is no longer available in the current graph';
+    return;
+  }
+
+  let incoming = 0;
+  let outgoing = 0;
+
+  for (const edge of edgeCatalog.values()) {
+    if (edge.target === node.id) {
+      incoming += 1;
+    }
+    if (edge.source === node.id) {
+      outgoing += 1;
     }
   }
 
-  applyFocusFilters();
-  applyJourneyHighlighting();
-  applyDrillTrailHighlighting();
-
-  renderExplainPanel(activeFlow);
-  updatePlaybackControls();
-  applyExecutionOverlay(false);
-  scheduleMinimapRender();
+  const location = node.filePath && typeof node.line === 'number' ? `${node.filePath}:${node.line}` : 'N/A';
+  nodeInspector.textContent = [
+    `Name: ${node.name}`,
+    `Type: ${node.type}`,
+    `Incoming edges: ${incoming}`,
+    `Outgoing edges: ${outgoing}`,
+    `Location: ${location}`
+  ].join('\n');
 }
 
-/**
- * Returns the currently selected flow definition.
- */
+function updateOpenSourceButtonState(): void {
+  if (!selectedNodeId) {
+    openSourceButton.disabled = true;
+    return;
+  }
+
+  const node = nodeCatalog.get(selectedNodeId);
+  openSourceButton.disabled = !node || !node.filePath || typeof node.line !== 'number';
+}
+
 function getSelectedFlow(): FlowDefinition | undefined {
   if (!selectedFlowId) {
     return undefined;
   }
 
-  return flowDefinitions.find((flow) => flow.id === selectedFlowId);
+  return flows.find((flow) => flow.id === selectedFlowId);
 }
 
-/**
- * Centers or animates viewport focus onto a specific node.
- */
-function focusNode(nodeId: string, animate: boolean): void {
-  const element = graph.getElementById(nodeId);
-  if (element.length === 0) {
-    return;
-  }
-
-  const zoomLevel = clamp(Math.max(graph.zoom(), 0.9), MIN_ZOOM, MAX_ZOOM);
-  if (animate) {
-    graph.animate(
-      {
-        center: { eles: element },
-        zoom: zoomLevel
-      },
-      {
-        duration: 220,
-        easing: 'ease-out-cubic'
-      }
-    );
-    return;
-  }
-
-  graph.center(element);
-}
-
-/**
- * Discovers likely function execution flows from call-graph topology.
- */
-function buildFlowDefinitions(graphData: GraphData, filters: FlowFilters): FlowDefinition[] {
-  const functionNodes = graphData.nodes.filter((node) => node.type === 'function');
-  if (functionNodes.length === 0) {
-    return [];
-  }
-
-  const functionIds = new Set(functionNodes.map((node) => node.id));
-  const functionIdList = [...functionIds];
-  const adjacencySets = new Map<string, Set<string>>();
-  const reverseAdjacencySets = new Map<string, Set<string>>();
-  const indegree = new Map<string, number>();
-  const outdegree = new Map<string, number>();
-
-  for (const functionNode of functionNodes) {
-    adjacencySets.set(functionNode.id, new Set<string>());
-    reverseAdjacencySets.set(functionNode.id, new Set<string>());
-    indegree.set(functionNode.id, 0);
-    outdegree.set(functionNode.id, 0);
-  }
-
-  const callEdges = graphData.edges.filter(
-    (edge) => edge.type === 'call' && getEdgeConfidence(edge) >= filters.minConfidence
-  );
-
-  for (const edge of callEdges) {
-    if (!functionIds.has(edge.source) || !functionIds.has(edge.target)) {
-      continue;
-    }
-
-    adjacencySets.get(edge.source)?.add(edge.target);
-    reverseAdjacencySets.get(edge.target)?.add(edge.source);
-  }
-
-  const adjacency = new Map<string, string[]>();
-  const reverseAdjacency = new Map<string, string[]>();
-  for (const nodeId of functionIdList) {
-    adjacency.set(nodeId, [...(adjacencySets.get(nodeId) ?? [])]);
-    reverseAdjacency.set(nodeId, [...(reverseAdjacencySets.get(nodeId) ?? [])]);
-  }
-
-  for (const [sourceId, targets] of adjacency.entries()) {
-    outdegree.set(sourceId, targets.length);
-
-    for (const targetId of targets) {
-      indegree.set(targetId, (indegree.get(targetId) ?? 0) + 1);
-    }
-  }
-
-  const nameById = new Map(functionNodes.map((node) => [node.id, node.name]));
-  const maxFlowDepth = 14;
-  const maxFlowCount = 220;
-  const maxPathsPerStart = 36;
-  const maxStartsPerComponent = 8;
-  const maxBranchesPerHop = 6;
-  const pathSignatures = new Set<string>();
-  const paths: string[][] = [];
-  const componentList = computeWeaklyConnectedComponents(functionIdList, adjacency, reverseAdjacency)
-    .filter((component) => component.some((nodeId) => (outdegree.get(nodeId) ?? 0) > 0));
-
-  if (componentList.length === 0) {
-    return functionNodes
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .slice(0, 25)
-      .map((node, index) => ({
-        id: `flow-${index + 1}`,
-        name: node.name,
-        nodeIds: [node.id],
-        edgeIds: []
-      }))
-      .filter((flow) => flow.nodeIds.length >= filters.minSteps);
-  }
-
-  const addPath = (path: string[]): void => {
-    if (path.length === 0 || paths.length >= maxFlowCount) {
-      return;
-    }
-
-    const signature = path.join('>');
-    if (pathSignatures.has(signature)) {
-      return;
-    }
-
-    pathSignatures.add(signature);
-    paths.push(path);
-
-    if (path.length >= 4 && paths.length < maxFlowCount) {
-      // Capture meaningful sub-flows from long traces so mid-graph behavior is discoverable.
-      for (let start = 1; start <= path.length - 3; start += 1) {
-        const subpath = path.slice(start);
-        const subSignature = subpath.join('>');
-        if (!pathSignatures.has(subSignature)) {
-          pathSignatures.add(subSignature);
-          paths.push(subpath);
-          if (paths.length >= maxFlowCount) {
-            break;
-          }
-        }
-      }
-    }
-  };
-
-  const walk = (
-    componentNodes: Set<string>,
-    startId: string,
-    path: string[],
-    currentId: string,
-    visited: Set<string>,
-    budget: { count: number }
-  ): void => {
-    if (budget.count >= maxPathsPerStart) {
-      return;
-    }
-
-    if (paths.length >= maxFlowCount) {
-      return;
-    }
-
-    const nextCandidates = prioritizeFlowCandidates(
-      (adjacency.get(currentId) ?? []).filter((candidate) => componentNodes.has(candidate)),
-      outdegree,
-      indegree,
-      nameById
-    ).slice(0, maxBranchesPerHop);
-
-    if (nextCandidates.length === 0 || path.length >= maxFlowDepth) {
-      addPath(path);
-      budget.count += 1;
-      return;
-    }
-
-    let expanded = false;
-    for (const nextId of nextCandidates) {
-      if (visited.has(nextId)) {
-        continue;
-      }
-
-      expanded = true;
-      visited.add(nextId);
-      walk(componentNodes, startId, [...path, nextId], nextId, visited, budget);
-      visited.delete(nextId);
-
-      if (paths.length >= maxFlowCount || budget.count >= maxPathsPerStart) {
-        return;
-      }
-    }
-
-    if (!expanded) {
-      addPath(path);
-      budget.count += 1;
-    }
-  };
-
-  for (const component of componentList) {
-    const componentNodeSet = new Set(component);
-    const starts = chooseFlowStarts(component, indegree, outdegree, nameById).slice(0, maxStartsPerComponent);
-
-    for (const startId of starts) {
-      const budget = { count: 0 };
-      const visited = new Set<string>([startId]);
-      walk(componentNodeSet, startId, [startId], startId, visited, budget);
-      if (paths.length >= maxFlowCount) {
-        break;
-      }
-    }
-
-    if (paths.length >= maxFlowCount) {
-      break;
-    }
-  }
-
-  // Ensure simple direct flows are always discoverable.
-  for (const edge of callEdges) {
-    if (paths.length >= maxFlowCount) {
-      break;
-    }
-
-    if (!functionIds.has(edge.source) || !functionIds.has(edge.target)) {
-      continue;
-    }
-
-    addPath([edge.source, edge.target]);
-  }
-
-  if (paths.length === 0) {
-    const singletonPaths = functionIdList
-      .sort((a, b) => (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b))
-      .slice(0, 25)
-      .map((nodeId) => [nodeId]);
-
-    singletonPaths.forEach((path) => addPath(path));
-  }
-
-  return paths
-    .map((nodeIds, index) => {
-      const firstName = nameById.get(nodeIds[0]) ?? nodeIds[0];
-      const lastName = nameById.get(nodeIds[nodeIds.length - 1]) ?? nodeIds[nodeIds.length - 1];
-      const name =
-        nodeIds.length === 1
-          ? firstName
-          : nodeIds.length === 2
-            ? `${firstName} -> ${lastName}`
-            : `${firstName} -> ${lastName} (+${nodeIds.length - 2})`;
-
-      const edgeIds = nodeIds
-        .slice(0, -1)
-        .map((sourceId, edgeIndex) => callEdgeByPair.get(flowPairKey(sourceId, nodeIds[edgeIndex + 1])))
-        .filter((edgeId): edgeId is string => typeof edgeId === 'string');
-
-      return {
-        id: `flow-${index + 1}`,
-        name,
-        nodeIds,
-        edgeIds
-      };
-    })
-    .filter((flow) => flow.nodeIds.length >= filters.minSteps)
-    .filter((flow) => {
-      if (filters.moduleId === 'all') {
-        return true;
-      }
-
-      return flow.nodeIds.some((nodeId) => {
-        const node = nodeCatalog.get(nodeId);
-        if (!node) {
-          return false;
-        }
-
-        return getModuleNodeId(node) === filters.moduleId;
-      });
-    })
-    .sort((a, b) => b.nodeIds.length - a.nodeIds.length)
-    .slice(0, 40);
-}
-
-/**
- * Chooses preferred starting nodes for flow exploration in a connected component.
- */
-function chooseFlowStarts(
-  component: string[],
-  indegree: Map<string, number>,
-  outdegree: Map<string, number>,
-  nameById: Map<string, string>
-): string[] {
-  const keywordRegex = /^(main|run|start|handle|process|execute|dispatch|entry|bootstrap|init|load)/i;
-  const sortedByPriority = [...component].sort((a, b) => {
-    const outDiff = (outdegree.get(b) ?? 0) - (outdegree.get(a) ?? 0);
-    if (outDiff !== 0) {
-      return outDiff;
-    }
-
-    const inDiff = (indegree.get(a) ?? 0) - (indegree.get(b) ?? 0);
-    if (inDiff !== 0) {
-      return inDiff;
-    }
-
-    return (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b);
-  });
-
-  const keywordStarts = sortedByPriority.filter((id) => keywordRegex.test(nameById.get(id) ?? id));
-  const pureEntryStarts = sortedByPriority.filter(
-    (id) => (indegree.get(id) ?? 0) === 0 && (outdegree.get(id) ?? 0) > 0
-  );
-  const fanoutStarts = sortedByPriority.filter((id) => (outdegree.get(id) ?? 0) > 0);
-
-  const result: string[] = [];
-  const appendUnique = (values: string[]): void => {
-    for (const value of values) {
-      if (!result.includes(value)) {
-        result.push(value);
-      }
-    }
-  };
-
-  appendUnique(keywordStarts);
-  appendUnique(pureEntryStarts);
-  appendUnique(fanoutStarts);
-
-  if (result.length === 0 && component.length > 0) {
-    result.push(component[0]);
-  }
-
-  return result;
-}
-
-/**
- * Prioritizes candidate traversal nodes to produce stable, useful flow paths.
- */
-function prioritizeFlowCandidates(
-  candidates: string[],
-  outdegree: Map<string, number>,
-  indegree: Map<string, number>,
-  nameById: Map<string, string>
-): string[] {
-  return [...candidates].sort((a, b) => {
-    const outDiff = (outdegree.get(b) ?? 0) - (outdegree.get(a) ?? 0);
-    if (outDiff !== 0) {
-      return outDiff;
-    }
-
-    const inDiff = (indegree.get(a) ?? 0) - (indegree.get(b) ?? 0);
-    if (inDiff !== 0) {
-      return inDiff;
-    }
-
-    return (nameById.get(a) ?? a).localeCompare(nameById.get(b) ?? b);
-  });
-}
-
-/**
- * Computes weakly connected components over directed call adjacency maps.
- */
-function computeWeaklyConnectedComponents(
-  nodes: string[],
-  adjacency: Map<string, string[]>,
-  reverseAdjacency: Map<string, string[]>
-): string[][] {
-  const visited = new Set<string>();
-  const components: string[][] = [];
-
-  for (const node of nodes) {
-    if (visited.has(node)) {
-      continue;
-    }
-
-    const queue = [node];
-    const component: string[] = [];
-    visited.add(node);
-
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (!current) {
-        continue;
-      }
-
-      component.push(current);
-      const neighbors = [...(adjacency.get(current) ?? []), ...(reverseAdjacency.get(current) ?? [])];
-
-      for (const neighbor of neighbors) {
-        if (visited.has(neighbor)) {
-          continue;
-        }
-
-        visited.add(neighbor);
-        queue.push(neighbor);
-      }
-    }
-
-    components.push(component);
-  }
-
-  return components;
-}
-
-/**
- * Creates a stable key for source->target edge lookups.
- */
-function flowPairKey(sourceId: string, targetId: string): string {
-  return `${sourceId}=>${targetId}`;
-}
-
-/**
- * Re-renders using the latest cached graph payload.
- */
-function rerenderGraphFromSource(): void {
-  if (!latestGraphData) {
-    return;
-  }
-
-  renderGraph(latestGraphData);
-}
-
-/**
- * Updates the navigation status banner text.
- */
-function updateNavigationStatus(message: string): void {
-  navigationStatus.textContent = message;
-}
-
-/**
- * Clears the recorded node/edge drill trail.
- */
-function clearDrillTrail(): void {
-  drillTrailState.enabled = false;
-  drillTrailState.nodeSequence = [];
-  drillTrailState.edgeSequence = [];
-  updateDrillTrailStatus();
-}
-
-/**
- * Returns unique values while preserving insertion order.
- */
-function uniqueOrdered(values: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    if (seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
-}
-
-/**
- * Gets active trail node ids with duplicates removed.
- */
-function getDrillTrailNodeIds(): string[] {
-  if (!drillTrailState.enabled) {
-    return [];
-  }
-  return uniqueOrdered(drillTrailState.nodeSequence);
-}
-
-/**
- * Gets active trail edge ids with duplicates removed.
- */
-function getDrillTrailEdgeIds(): string[] {
-  if (!drillTrailState.enabled) {
-    return [];
-  }
-  return uniqueOrdered(drillTrailState.edgeSequence);
-}
-
-/**
- * Renders drill trail history and summary text in the sidebar.
- */
-function updateDrillTrailStatus(): void {
-  const sequence = drillTrailState.nodeSequence;
-  if (sequence.length === 0) {
-    trailStatus.textContent = 'Chosen path: none';
-    trailHistory.replaceChildren();
-    return;
-  }
-
-  trailStatus.textContent = `Chosen path history (${sequence.length} steps):`;
-  trailHistory.replaceChildren();
-
-  sequence.forEach((nodeId, index) => {
-    const item = document.createElement('li');
-    const nodeName = nodeCatalog.get(nodeId)?.name ?? nodeId;
-    item.textContent = `${index + 1}. ${nodeName}`;
-    trailHistory.appendChild(item);
-  });
-}
-
-/**
- * Defines priority order when multiple edge types can represent a trail transition.
- */
-function getTrailEdgePriority(edgeType: GraphEdgeType): number {
-  if (edgeType === 'call') {
-    return 5;
-  }
-  if (edgeType === 'dependency') {
-    return 4;
-  }
-  if (edgeType === 'dataflow') {
-    return 3;
-  }
-  if (edgeType === 'class-usage') {
-    return 2;
-  }
-  if (edgeType === 'execution-path') {
-    return 1;
-  }
-  return 0;
-}
-
-/**
- * Resolves the best edge id connecting two selected trail nodes.
- */
-function resolveTrailEdgeId(sourceNodeId: string, targetNodeId: string): string | undefined {
-  let bestEdgeId: string | undefined;
-  let bestScore = -1;
-
-  graph.edges().forEach((edge) => {
-    const sourceId = edge.source().id();
-    const targetId = edge.target().id();
-    const isCandidate =
-      (sourceId === sourceNodeId && targetId === targetNodeId) ||
-      (sourceId === targetNodeId && targetId === sourceNodeId);
-    if (!isCandidate) {
-      return;
-    }
-
-    if (!isDependencyTraversableEdge(edge)) {
-      return;
-    }
-
-    const edgeId = edge.id();
-    const edgeMeta = edgeCatalog.get(edgeId);
-    if (!edgeMeta) {
-      return;
-    }
-
-    const score = getTrailEdgePriority(edgeMeta.type) * 10 + getEdgeConfidence(edgeMeta);
-    if (score > bestScore) {
-      bestScore = score;
-      bestEdgeId = edgeId;
-    }
-  });
-
-  return bestEdgeId;
-}
-
-/**
- * Appends node selections into a persistent drill trail history.
- */
-function recordDrillSelection(previousNodeId: string | undefined, currentNodeId: string): void {
-  if (!nodeCatalog.has(currentNodeId)) {
-    return;
-  }
-
-  if (!drillTrailState.enabled) {
-    drillTrailState.enabled = true;
-  }
-
-  const sequence = drillTrailState.nodeSequence;
-  if (sequence[sequence.length - 1] !== currentNodeId) {
-    sequence.push(currentNodeId);
-  }
-
-  if (!previousNodeId || previousNodeId === currentNodeId) {
-    return;
-  }
-
-  if (!nodeCatalog.has(previousNodeId)) {
-    return;
-  }
-
-  const edgeId = resolveTrailEdgeId(previousNodeId, currentNodeId);
-  if (edgeId) {
-    drillTrailState.edgeSequence.push(edgeId);
-  }
-
-  updateDrillTrailStatus();
-}
-
-/**
- * Applies visual highlighting for recorded drill trail nodes and edges.
- */
-function applyDrillTrailHighlighting(): void {
-  if (!drillTrailState.enabled) {
-    return;
-  }
-
-  const trailNodeIds = getDrillTrailNodeIds();
-  for (const nodeId of trailNodeIds) {
-    graph.getElementById(nodeId).addClass('trail-node').removeClass('dimmed').removeClass('hidden-by-scope');
-  }
-
-  const trailEdgeIds = getDrillTrailEdgeIds();
-  for (const edgeId of trailEdgeIds) {
-    graph.getElementById(edgeId).addClass('trail-edge').removeClass('dimmed').removeClass('hidden-by-scope');
-  }
-
-  const tailNodeId = trailNodeIds[trailNodeIds.length - 1];
-  if (tailNodeId) {
-    graph.getElementById(tailNodeId).addClass('trail-head');
-  }
-
-  const tailEdgeId = trailEdgeIds[trailEdgeIds.length - 1];
-  if (tailEdgeId) {
-    graph.getElementById(tailEdgeId).addClass('trail-head-edge');
-  }
-}
-
-interface DrilldownOptionsSnapshot {
-  incomingNodeIds: string[];
-  outgoingNodeIds: string[];
-  traversableEdgeIds: string[];
-}
-
-/**
- * Collects direct incoming/outgoing traversal options from a selected node.
- */
-function collectDirectTraversalOptions(nodeId: string): DrilldownOptionsSnapshot {
-  const node = graph.getElementById(nodeId);
-  if (node.length === 0) {
-    return {
-      incomingNodeIds: [],
-      outgoingNodeIds: [],
-      traversableEdgeIds: []
-    };
-  }
-
-  const incomingNodeIds = new Set<string>();
-  const outgoingNodeIds = new Set<string>();
-  const traversableEdgeIds = new Set<string>();
-
-  node.incomers('edge').forEach((edge) => {
-    if (!isDependencyTraversableEdge(edge)) {
-      return;
-    }
-
-    const sourceId = edge.source().id();
-    if (!sourceId || sourceId === nodeId) {
-      return;
-    }
-
-    incomingNodeIds.add(sourceId);
-    traversableEdgeIds.add(edge.id());
-  });
-
-  node.outgoers('edge').forEach((edge) => {
-    if (!isDependencyTraversableEdge(edge)) {
-      return;
-    }
-
-    const targetId = edge.target().id();
-    if (!targetId || targetId === nodeId) {
-      return;
-    }
-
-    outgoingNodeIds.add(targetId);
-    traversableEdgeIds.add(edge.id());
-  });
-
-  const sortByName = (ids: Set<string>): string[] =>
-    [...ids].sort((a, b) => {
-      const aName = nodeCatalog.get(a)?.name ?? a;
-      const bName = nodeCatalog.get(b)?.name ?? b;
-      return aName.localeCompare(bName);
-    });
-
-  return {
-    incomingNodeIds: sortByName(incomingNodeIds),
-    outgoingNodeIds: sortByName(outgoingNodeIds),
-    traversableEdgeIds: [...traversableEdgeIds]
-  };
-}
-
-/**
- * Rearranges local neighborhood nodes into a drilldown layout around the selected node.
- */
-function applyNodeDrilldownLayout(nodeId: string): void {
-  const snapshot = collectDirectTraversalOptions(nodeId);
-  const selected = graph.getElementById(nodeId);
-  if (selected.length === 0) {
-    return;
-  }
-
-  const spacingFactor = 0.9 + declutterState.layoutSpacing * 0.28;
-  const rowSpacing = 108 * spacingFactor;
-  const branchBaseX = 250 * spacingFactor;
-  const branchColumnGap = 132 * spacingFactor;
-  const rowsPerColumn = 8;
-
-  const positions = new Map<string, Point>();
-  positions.set(nodeId, { x: 0, y: 0 });
-
-  const selectedNode = nodeCatalog.get(nodeId);
-  const selectedModuleId = selectedNode ? getModuleNodeId(selectedNode) : undefined;
-  if (selectedModuleId && selectedModuleId !== nodeId) {
-    const moduleElement = graph.getElementById(selectedModuleId);
-    if (moduleElement.length > 0 && !moduleElement.hasClass('hidden-by-scope')) {
-      positions.set(selectedModuleId, { x: 0, y: -170 * spacingFactor });
-    }
-  }
-
-  const assignSide = (ids: string[], side: 'left' | 'right'): void => {
-    ids.forEach((targetId, index) => {
-      const element = graph.getElementById(targetId);
-      if (element.length === 0 || element.hasClass('hidden-by-scope')) {
-        return;
-      }
-
-      const column = Math.floor(index / rowsPerColumn);
-      const rowInColumn = index % rowsPerColumn;
-      const rowsInColumn = Math.min(rowsPerColumn, ids.length - column * rowsPerColumn);
-      const y = (rowInColumn - (rowsInColumn - 1) / 2) * rowSpacing;
-      const x = (side === 'left' ? -1 : 1) * (branchBaseX + column * branchColumnGap);
-      positions.set(targetId, { x, y });
-    });
-  };
-
-  assignSide(snapshot.incomingNodeIds, 'left');
-  assignSide(snapshot.outgoingNodeIds, 'right');
-
-  const trailNodeIds = getDrillTrailNodeIds().filter(
-    (trailNodeId) => trailNodeId !== nodeId && !positions.has(trailNodeId)
-  );
-  if (trailNodeIds.length > 0) {
-    const trailPerRow = 10;
-    const trailRowGap = 78 * spacingFactor;
-    const trailColGap = 118 * spacingFactor;
-    const trailBaseY = -230 * spacingFactor;
-
-    trailNodeIds.forEach((trailNodeId, index) => {
-      const element = graph.getElementById(trailNodeId);
-      if (element.length === 0 || element.hasClass('hidden-by-scope')) {
-        return;
-      }
-
-      const row = Math.floor(index / trailPerRow);
-      const indexInRow = index % trailPerRow;
-      const itemsInRow = Math.min(trailPerRow, trailNodeIds.length - row * trailPerRow);
-      const x = (indexInRow - (itemsInRow - 1) / 2) * trailColGap;
-      const y = trailBaseY - row * trailRowGap;
-      positions.set(trailNodeId, { x, y });
-    });
-  }
-
-  const neighborhood = graph.collection();
-  for (const [targetId, point] of positions.entries()) {
-    const element = graph.getElementById(targetId);
-    if (element.length === 0) {
-      continue;
-    }
-
-    neighborhood.merge(element);
-    element.animate(
-      {
-        position: point
-      },
-      {
-        duration: 240,
-        easing: 'ease-out-cubic'
-      }
-    );
-  }
-
-  window.setTimeout(() => {
-    if (neighborhood.length > 0) {
-      graph.fit(neighborhood, 110);
-    }
-    updateZoomResetLabel();
-    scheduleMinimapRender();
-  }, 250);
-
-  const selectedName = nodeCatalog.get(nodeId)?.name ?? nodeId;
-  updateNavigationStatus(
-    `${selectedName}: ${snapshot.outgoingNodeIds.length} outgoing option${snapshot.outgoingNodeIds.length === 1 ? '' : 's'}, ${snapshot.incomingNodeIds.length} incoming.`
-  );
-}
-
-/**
- * Updates journey controls and status text.
- */
-function updateJourneyUi(message?: string): void {
-  const total = journeyState.nodeIds.length;
-  const currentStep = journeyState.enabled && total > 0 ? journeyState.currentIndex + 1 : 0;
-  journeyMeta.textContent = `Step ${currentStep} / ${total}`;
-  workflowContext.textContent =
-    journeyState.mode === 'file'
-      ? 'File Flow keeps traversal at file/module level.'
-      : 'Code Flow drills into callable paths and decisions.';
-
-  journeyPrevButton.disabled = !journeyState.enabled || journeyState.currentIndex <= 0;
-  journeyNextButton.disabled = !journeyState.enabled || journeyState.currentIndex >= total - 1;
-  journeyClearButton.disabled = !journeyState.enabled;
-
-  if (message) {
-    journeyStatus.textContent = message;
-    return;
-  }
-
-  if (!journeyState.enabled) {
-    journeyStatus.textContent = 'Pick a mode and entry, then Start to walk the graph.';
-    return;
-  }
-
-  const currentNodeId = journeyState.nodeIds[journeyState.currentIndex];
-  const currentNodeName = nodeCatalog.get(currentNodeId)?.name ?? currentNodeId;
-  journeyStatus.textContent = `${journeyState.mode === 'file' ? 'File Flow' : 'Code Flow'} active at ${currentNodeName}`;
-}
-
-/**
- * Resets journey state and optionally reports a custom status message.
- */
-function clearJourney(message?: string): void {
-  journeyState.enabled = false;
-  journeyState.nodeIds = [];
-  journeyState.edgeIds = [];
-  journeyState.currentIndex = 0;
-
-  if (message) {
-    updateJourneyUi(message);
-    return;
-  }
-
-  updateJourneyUi();
-}
-
-/**
- * Applies mode-specific defaults before starting a file/code journey.
- */
-function setJourneyModePresentation(mode: JourneyMode): void {
-  graphAbstraction.autoByZoom = false;
-  abstractionAutoToggle.checked = false;
-
-  if (mode === 'file') {
-    graphAbstraction.manualLevel = 'system';
-    abstractionLevelSelect.value = 'system';
-    if (reductionState.collapseLibraries) {
-      reductionState.collapseLibraries = false;
-      collapseLibrariesToggle.checked = false;
-    }
-  } else {
-    graphAbstraction.manualLevel = 'function';
-    abstractionLevelSelect.value = 'function';
-  }
-
-  setFocusModule(undefined);
-  focusFilters.neighborhoodOnly = false;
-  focusNeighborhood.checked = false;
-  syncAbstractionLevelFromZoom(true);
-}
-
-/**
- * Builds a weighted traversal path for file or code journey mode.
- */
-function buildJourneyPath(graphData: GraphData, mode: JourneyMode, entryNodeId: string): { nodeIds: string[]; edgeIds: string[] } {
-  interface Neighbor {
-    targetId: string;
-    edgeId: string;
-    weight: number;
-  }
-
-  const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
-  const adjacency = new Map<string, Neighbor[]>();
-
-  const addNeighbor = (sourceId: string, targetId: string, edge: GraphEdge, weightBonus: number): void => {
-    if (!nodeById.has(sourceId) || !nodeById.has(targetId)) {
-      return;
-    }
-
-    const neighbors = adjacency.get(sourceId) ?? [];
-    const existing = neighbors.find((neighbor) => neighbor.targetId === targetId);
-    const weight = getEdgeConfidence(edge) + weightBonus;
-
-    if (existing) {
-      if (weight > existing.weight) {
-        existing.weight = weight;
-        existing.edgeId = edge.id;
-      }
-    } else {
-      neighbors.push({
-        targetId,
-        edgeId: edge.id,
-        weight
-      });
-    }
-
-    adjacency.set(sourceId, neighbors);
-  };
-
-  if (mode === 'code') {
-    for (const edge of graphData.edges) {
-      if (edge.type !== 'call') {
-        continue;
-      }
-
-      const sourceNode = nodeById.get(edge.source);
-      const targetNode = nodeById.get(edge.target);
-      if (!sourceNode || !targetNode || sourceNode.type !== 'function' || targetNode.type !== 'function') {
-        continue;
-      }
-
-      addNeighbor(sourceNode.id, targetNode.id, edge, 0.35);
-    }
-  } else {
-    for (const edge of graphData.edges) {
-      if (edge.type !== 'dependency' && edge.type !== 'call' && edge.type !== 'dataflow' && edge.type !== 'class-usage') {
-        continue;
-      }
-
-      const sourceNode = nodeById.get(edge.source);
-      const targetNode = nodeById.get(edge.target);
-      const sourceModuleId = sourceNode ? thisNodeModuleId(sourceNode) : undefined;
-      const targetModuleId = targetNode ? thisNodeModuleId(targetNode) : undefined;
-
-      if (!sourceModuleId || !targetModuleId || sourceModuleId === targetModuleId) {
-        continue;
-      }
-
-      const bonus = edge.type === 'dependency' ? 0.42 : edge.type === 'call' ? 0.28 : 0.18;
-      addNeighbor(sourceModuleId, targetModuleId, edge, bonus);
-    }
-  }
-
-  const nodeIds: string[] = [];
-  const edgeIds: string[] = [];
-  const visited = new Set<string>();
-
-  if (!nodeById.has(entryNodeId)) {
-    return { nodeIds, edgeIds };
-  }
-
-  nodeIds.push(entryNodeId);
-  visited.add(entryNodeId);
-
-  let currentId = entryNodeId;
-  const maxSteps = 140;
-  for (let step = 0; step < maxSteps; step += 1) {
-    const candidates = (adjacency.get(currentId) ?? [])
-      .filter((candidate) => !visited.has(candidate.targetId))
-      .sort((a, b) => {
-        if (b.weight !== a.weight) {
-          return b.weight - a.weight;
-        }
-
-        const aName = nodeById.get(a.targetId)?.name ?? a.targetId;
-        const bName = nodeById.get(b.targetId)?.name ?? b.targetId;
-        const sourceTie = aName.localeCompare(bName);
-        if (sourceTie !== 0) {
-          return sourceTie;
-        }
-
-          return a.targetId.localeCompare(b.targetId);
-      });
-
-    if (candidates.length === 0) {
-      break;
-    }
-
-    const next = candidates[0];
-    nodeIds.push(next.targetId);
-    edgeIds.push(next.edgeId);
-    visited.add(next.targetId);
-    currentId = next.targetId;
-  }
-
-  return { nodeIds, edgeIds };
-}
-
-/**
- * Starts guided traversal from the selected journey entry node.
- */
-function startJourney(): void {
-  if (!latestGraphData) {
-    updateJourneyUi('Graph not ready yet. Click Refresh and try again.');
-    return;
-  }
-
-  const entryNodeId = journeyEntrySelect.value || journeyState.entryNodeId;
-  if (!entryNodeId) {
-    updateJourneyUi('Choose an entry node before starting the journey.');
-    return;
-  }
-
-  stopPlayback();
-  selectedFlowId = undefined;
-  selectedStepIndex = undefined;
-  callPathExplorer.enabled = false;
-  dataFlowExplorer.enabled = false;
-
-  setJourneyModePresentation(journeyState.mode);
-
-  const graphData = latestDisplayedGraphData;
-  if (!graphData) {
-    updateJourneyUi('Graph view unavailable for journey start. Try Refresh.');
-    return;
-  }
-
-  const path = buildJourneyPath(graphData, journeyState.mode, entryNodeId);
-  if (path.nodeIds.length === 0) {
-    updateJourneyUi('Selected entry is not visible in current view. Choose another entry.');
-    return;
-  }
-
-  journeyState.enabled = true;
-  journeyState.entryNodeId = entryNodeId;
-  journeyState.nodeIds = path.nodeIds;
-  journeyState.edgeIds = path.edgeIds;
-  journeyState.currentIndex = 0;
-  selectedNodeId = path.nodeIds[0];
-
-  applyFlowHighlighting();
-  focusNode(selectedNodeId, true);
-  updateJourneyUi(`Journey started: ${journeyState.mode === 'file' ? 'File Flow' : 'Code Flow'}.`);
-}
-
-/**
- * Moves the active journey step backward or forward.
- */
-function stepJourney(delta: number): void {
-  if (!journeyState.enabled || journeyState.nodeIds.length === 0) {
-    updateJourneyUi('Start a journey first.');
-    return;
-  }
-
-  const nextIndex = clamp(journeyState.currentIndex + delta, 0, journeyState.nodeIds.length - 1);
-  if (nextIndex === journeyState.currentIndex) {
-    return;
-  }
-
-  journeyState.currentIndex = nextIndex;
-  selectedNodeId = journeyState.nodeIds[nextIndex];
-  applyFlowHighlighting();
-  focusNode(selectedNodeId, true);
-  updateJourneyUi();
-}
-
-/**
- * Applies highlighting/masking for active journey paths.
- */
-function applyJourneyHighlighting(): void {
-  if (!journeyState.enabled || journeyState.nodeIds.length === 0) {
-    return;
-  }
-
-  const activeNodeIds = new Set(journeyState.nodeIds);
-  const activeEdgeIds = new Set(journeyState.edgeIds);
-
-  const maskClass = declutterState.visibilityMode === 'hide' ? 'hidden-by-scope' : 'dimmed';
-
-  graph.nodes().forEach((node) => {
-    if (!activeNodeIds.has(node.id())) {
-      node.addClass(maskClass);
-      return;
-    }
-
-    node.addClass('flow-node').removeClass('dimmed');
-  });
-
-  graph.edges().forEach((edge) => {
-    if (!activeEdgeIds.has(edge.id())) {
-      edge.addClass(maskClass);
-      return;
-    }
-
-    edge.addClass('flow-edge').removeClass('dimmed');
-  });
-
-  const currentNodeId = journeyState.nodeIds[journeyState.currentIndex];
-  if (currentNodeId) {
-    graph.getElementById(currentNodeId).addClass('flow-current').addClass('node-selected').removeClass('dimmed');
-  }
-
-  if (journeyState.currentIndex > 0) {
-    const currentEdgeId = journeyState.edgeIds[journeyState.currentIndex - 1];
-    if (currentEdgeId) {
-      graph.getElementById(currentEdgeId).addClass('flow-current-edge').removeClass('dimmed');
-    }
-  }
-}
-
-/**
- * Toggles guided/full mode panel visibility and defaults.
- */
-function setGuidedMode(enabled: boolean, rerender: boolean): void {
-  guidedModeEnabled = enabled;
-  viewModeButton.textContent = enabled ? 'Advanced: Off' : 'Advanced: On';
-  viewModeButton.classList.toggle('mode-full', !enabled);
-
-  for (const panel of advancedPanels) {
-    panel.classList.toggle('panel-hidden', enabled);
-  }
-
-  if (enabled) {
-    declutterState.visibilityMode = 'hide';
-    focusVisibilitySelect.value = 'hide';
-
-    if (graphAbstraction.autoByZoom) {
-      graphAbstraction.autoByZoom = false;
-      abstractionAutoToggle.checked = false;
-    }
-
-    if (reductionState.collapseLibraries) {
-      reductionState.collapseLibraries = false;
-      collapseLibrariesToggle.checked = false;
-    }
-
-    graphAbstraction.manualLevel = 'system';
-    abstractionLevelSelect.value = 'system';
-
-    graphAbstraction.effectiveLevel = graphAbstraction.manualLevel;
-    updateAbstractionStatus();
-
-    if (rerender) {
-      rerenderGraphFromSource();
-      fitGraphToCurrentView();
-    }
-
-    updateNavigationStatus('Advanced tools hidden. Use Workflow controls for path-first exploration.');
-  } else {
-    declutterState.visibilityMode = 'dim';
-    focusVisibilitySelect.value = 'dim';
-
-    if (rerender) {
-      rerenderGraphFromSource();
-    }
-
-    updateNavigationStatus('Advanced tools visible. Explore controls and deep analysis are enabled.');
-  }
-
-  updateJourneyUi();
-
-}
-
-/**
- * Fits the current graph content into the viewport.
- */
-function fitGraphToCurrentView(): void {
-  graph.fit(graph.elements(), 80);
-  updateZoomResetLabel();
-  scheduleMinimapRender();
-}
-
-/**
- * Sets module scope filter when the module exists in the focus selector.
- */
-function setFocusModule(moduleNodeId: string | undefined): void {
-  if (!moduleNodeId) {
-    focusFilters.moduleNodeId = 'all';
-    focusFile.value = 'all';
-    return;
-  }
-
-  const hasOption = Array.from(focusFile.options).some((option) => option.value === moduleNodeId);
-  if (!hasOption) {
-    focusFilters.moduleNodeId = 'all';
-    focusFile.value = 'all';
-    return;
-  }
-
-  focusFilters.moduleNodeId = moduleNodeId;
-  focusFile.value = moduleNodeId;
-}
-
-/**
- * Resets call-path and data-flow exploration overlays to default states.
- */
-function clearExplorationOverlays(): void {
-  callPathExplorer.enabled = false;
-  dataFlowExplorer.enabled = false;
-  callPathExplorer.entryNodeId = '';
-  dataFlowExplorer.sourceNodeId = '';
-  latestDataFlowAnalysis = undefined;
-  callPathEntry.value = '';
-  dataFlowSource.value = '';
-  callPathStatus.textContent = 'Auto mode: discovering broad flow patterns.';
-  dataFlowStatus.textContent = 'Select a source node to trace data transformations.';
-}
-
-/**
- * Switches the graph into a high-level overview state.
- */
-function applyOverviewMode(): void {
-  clearJourney('Journey cleared.');
-  clearDrillTrail();
-  stopPlayback();
-  selectedFlowId = undefined;
-  selectedStepIndex = undefined;
-  selectedNodeId = undefined;
-  clearExplorationOverlays();
-
-  setFocusModule(undefined);
-  focusFilters.neighborhoodOnly = false;
-  focusNeighborhood.checked = false;
-
-  graphAbstraction.autoByZoom = false;
-  abstractionAutoToggle.checked = false;
-  graphAbstraction.manualLevel = 'system';
-  graphAbstraction.effectiveLevel = 'system';
-  abstractionLevelSelect.value = 'system';
-  updateAbstractionStatus();
-
-  renderFlowSidebar();
-  rerenderGraphFromSource();
-  fitGraphToCurrentView();
-  updateNavigationStatus('Overview mode active: module-level map fitted to canvas.');
-}
-
-/**
- * Narrows graph scope to the currently selected node and its neighborhood.
- */
-function followCurrentSelection(): void {
-  if (!selectedNodeId) {
-    updateNavigationStatus('Follow selection requires choosing a node first.');
-    return;
-  }
-
-  const node = nodeCatalog.get(selectedNodeId);
-  if (!node) {
-    updateNavigationStatus('Selected node is no longer available in current graph state.');
-    return;
-  }
-
-  const targetLevel: AbstractionLevel =
-    node.type === 'module' ? 'system' : node.type === 'variable' ? 'detail' : 'function';
-  graphAbstraction.autoByZoom = false;
-  abstractionAutoToggle.checked = false;
-  graphAbstraction.manualLevel = targetLevel;
-  graphAbstraction.effectiveLevel = targetLevel;
-  abstractionLevelSelect.value = targetLevel;
-  updateAbstractionStatus();
-
-  const moduleNodeId = node.type === 'module' ? node.id : getModuleNodeId(node);
-  setFocusModule(moduleNodeId);
-  focusFilters.neighborhoodOnly = true;
-  focusNeighborhood.checked = true;
-
-  rerenderGraphFromSource();
-  focusNode(node.id, true);
-  applyFlowHighlighting();
-  updateNavigationStatus(`Following ${node.name}: scoped to local neighborhood.`);
-}
-
-/**
- * Restores baseline navigation state and clears transient overlays.
- */
-function resetNavigationState(): void {
-  clearJourney('Journey cleared.');
-  clearDrillTrail();
-  stopPlayback();
-  selectedFlowId = undefined;
-  selectedStepIndex = undefined;
-  selectedNodeId = undefined;
-  clearExplorationOverlays();
-
-  setFocusModule(undefined);
-  focusFilters.neighborhoodOnly = false;
-  focusNeighborhood.checked = false;
-
-  graphAbstraction.manualLevel = 'system';
-  abstractionLevelSelect.value = 'system';
-  graphAbstraction.autoByZoom = false;
-  abstractionAutoToggle.checked = false;
-  reductionState.collapseLibraries = false;
-  collapseLibrariesToggle.checked = false;
-
-  renderFlowSidebar();
-  syncAbstractionLevelFromZoom(true);
-  fitGraphToCurrentView();
-  updateNavigationStatus('Navigation reset: stable file-level view restored and full graph fitted.');
-}
-
-/**
- * Detects whether keyboard events originated from typing-capable controls.
- */
-function isTypingContext(target: EventTarget | null): boolean {
-  const element = target as HTMLElement | null;
+function getRequiredElement<TElement extends HTMLElement>(selector: string): TElement {
+  const element = document.querySelector<TElement>(selector);
   if (!element) {
-    return false;
-  }
-
-  const tagName = element.tagName.toLowerCase();
-  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
-    return true;
-  }
-
-  return element.isContentEditable;
-}
-
-/**
- * Maps zoom level to abstraction level for auto-abstraction mode.
- */
-function resolveAbstractionLevelForZoom(zoom: number): AbstractionLevel {
-  if (zoom < 0.56) {
-    return 'system';
-  }
-
-  if (zoom < 1.18) {
-    return 'function';
-  }
-
-  return 'detail';
-}
-
-/**
- * Updates abstraction mode/level status text.
- */
-function updateAbstractionStatus(): void {
-  const mode = graphAbstraction.autoByZoom ? 'auto' : 'manual';
-  abstractionStatus.textContent = `${mode} | level: ${graphAbstraction.effectiveLevel}`;
-}
-
-/**
- * Synchronizes effective abstraction with manual selection or current zoom.
- */
-function syncAbstractionLevelFromZoom(forceRender: boolean): void {
-  const previous = graphAbstraction.effectiveLevel;
-  const nextLevel = graphAbstraction.autoByZoom
-    ? resolveAbstractionLevelForZoom(graph.zoom())
-    : graphAbstraction.manualLevel;
-
-  graphAbstraction.effectiveLevel = nextLevel;
-  abstractionLevelSelect.value = nextLevel;
-  updateAbstractionStatus();
-
-  if (forceRender || previous !== nextLevel) {
-    rerenderGraphFromSource();
-  }
-}
-
-/**
- * Refreshes reduction hint text based on active reduction settings.
- */
-function updateReductionHint(): void {
-  if (!reductionState.collapseInternalFunctions && !reductionState.collapseLibraries) {
-    reductionHint.textContent = 'Reduction off: full graph shown.';
-    return;
-  }
-
-  const parts: string[] = [];
-
-  if (reductionState.collapseInternalFunctions) {
-    const expandedCount = reductionState.expandedModuleIds.size;
-    parts.push(
-      expandedCount > 0
-        ? `${expandedCount} module${expandedCount === 1 ? '' : 's'} expanded`
-        : 'modules collapsed'
-    );
-  }
-
-  if (reductionState.collapseLibraries) {
-    parts.push(reductionState.librariesExpanded ? 'libraries expanded' : 'libraries collapsed');
-  }
-
-  reductionHint.textContent = `Double-click to expand on demand (${parts.join(', ')}).`;
-}
-
-/**
- * Expands/collapses reduced module or library aggregate nodes.
- */
-function toggleReductionExpansion(nodeId: string): boolean {
-  if (nodeId === COLLAPSED_LIBRARIES_NODE_ID && reductionState.collapseLibraries) {
-    reductionState.librariesExpanded = !reductionState.librariesExpanded;
-    updateReductionHint();
-    rerenderGraphFromSource();
-    return true;
-  }
-
-  const node = nodeCatalog.get(nodeId);
-  if (!node || node.type !== 'module' || node.metadata?.external) {
-    return false;
-  }
-
-  if (!reductionState.collapseInternalFunctions) {
-    return false;
-  }
-
-  if (reductionState.expandedModuleIds.has(nodeId)) {
-    reductionState.expandedModuleIds.delete(nodeId);
-  } else {
-    reductionState.expandedModuleIds.add(nodeId);
-  }
-
-  updateReductionHint();
-  rerenderGraphFromSource();
-  return true;
-}
-
-/**
- * Applies reduction transforms and returns the currently displayed graph projection.
- */
-function buildDisplayedGraphData(source: GraphData): GraphData {
-  const layerFiltered = buildLayerFilteredGraphData(source);
-  const abstractionFiltered = buildAbstractionFilteredGraphData(layerFiltered);
-  const sourceNodesById = new Map(abstractionFiltered.nodes.map((node) => [node.id, node]));
-  const functionNodes = abstractionFiltered.nodes.filter((node) => node.type === 'function');
-  const moduleNodes = abstractionFiltered.nodes.filter((node) => node.type === 'module');
-  const externalModuleIds = new Set(
-    moduleNodes.filter((node) => node.metadata?.external).map((node) => node.id)
-  );
-
-  const moduleIds = new Set(moduleNodes.filter((node) => !node.metadata?.external).map((node) => node.id));
-  for (const expandedId of [...reductionState.expandedModuleIds]) {
-    if (!moduleIds.has(expandedId)) {
-      reductionState.expandedModuleIds.delete(expandedId);
-    }
-  }
-
-  const hiddenFunctionIds = new Set<string>();
-  const hiddenFunctionCountByModule = new Map<string, number>();
-
-  if (reductionState.collapseInternalFunctions) {
-    for (const functionNode of functionNodes) {
-      const moduleNodeId = getModuleNodeId(functionNode);
-      if (!moduleNodeId || reductionState.expandedModuleIds.has(moduleNodeId)) {
-        continue;
-      }
-
-      hiddenFunctionIds.add(functionNode.id);
-      hiddenFunctionCountByModule.set(
-        moduleNodeId,
-        (hiddenFunctionCountByModule.get(moduleNodeId) ?? 0) + 1
-      );
-    }
-  }
-
-  const hiddenExternalModuleIds =
-    reductionState.collapseLibraries && !reductionState.librariesExpanded ? externalModuleIds : new Set<string>();
-
-  const visibleNodes: GraphNode[] = [];
-
-  for (const node of abstractionFiltered.nodes) {
-    if (hiddenFunctionIds.has(node.id)) {
-      continue;
-    }
-
-    if (hiddenExternalModuleIds.has(node.id)) {
-      continue;
-    }
-
-    const metadata = { ...(node.metadata ?? {}) };
-    const collapsedCount = hiddenFunctionCountByModule.get(node.id) ?? 0;
-    if (node.type === 'module' && collapsedCount > 0) {
-      metadata.collapsedFunctions = collapsedCount;
-      metadata.reductionCollapsed = true;
-    }
-
-    visibleNodes.push({
-      ...node,
-      metadata
-    });
-  }
-
-  const aggregatedCallCounts = new Map<string, number>();
-  const aggregatedLibraryDeps = new Map<string, number>();
-  const visibleEdges: GraphEdge[] = [];
-
-  for (const edge of abstractionFiltered.edges) {
-    const sourceHiddenFunction = hiddenFunctionIds.has(edge.source);
-    const targetHiddenFunction = hiddenFunctionIds.has(edge.target);
-    const sourceHiddenExternal = hiddenExternalModuleIds.has(edge.source);
-    const targetHiddenExternal = hiddenExternalModuleIds.has(edge.target);
-
-    if (sourceHiddenExternal || targetHiddenExternal) {
-      if (
-        edge.type === 'dependency' &&
-        reductionState.collapseLibraries &&
-        !reductionState.librariesExpanded &&
-        !sourceHiddenExternal
-      ) {
-        aggregatedLibraryDeps.set(edge.source, (aggregatedLibraryDeps.get(edge.source) ?? 0) + 1);
-      }
-      continue;
-    }
-
-    if (sourceHiddenFunction || targetHiddenFunction) {
-      if (edge.type === 'call' && reductionState.collapseInternalFunctions) {
-        const sourceModuleId = thisNodeModuleId(sourceNodesById.get(edge.source));
-        const targetModuleId = thisNodeModuleId(sourceNodesById.get(edge.target));
-
-        if (sourceModuleId && targetModuleId) {
-          const key = flowPairKey(sourceModuleId, targetModuleId);
-          aggregatedCallCounts.set(key, (aggregatedCallCounts.get(key) ?? 0) + 1);
-        }
-      }
-
-      continue;
-    }
-
-    visibleEdges.push({ ...edge });
-  }
-
-  for (const [pairKey, count] of aggregatedCallCounts.entries()) {
-    const [sourceId, targetId] = pairKey.split('=>');
-    if (!sourceId || !targetId) {
-      continue;
-    }
-
-    visibleEdges.push({
-      id: `edge:reduction:call:${sourceId}->${targetId}`,
-      source: sourceId,
-      target: targetId,
-      type: 'call',
-      layer: 'dependency',
-      metadata: {
-        reduced: true,
-        collapsedCallCount: count,
-        confidence: 0.52,
-        provenance: 'heuristic',
-        reason: `${count} collapsed function call${count === 1 ? '' : 's'}`
-      }
-    });
-  }
-
-  if (reductionState.collapseLibraries && !reductionState.librariesExpanded) {
-    const hiddenExternalCount = hiddenExternalModuleIds.size;
-
-    if (hiddenExternalCount > 0) {
-      visibleNodes.push({
-        id: COLLAPSED_LIBRARIES_NODE_ID,
-        type: 'module',
-        name: 'Libraries',
-        layers: ['structural', 'dependency'],
-        roles: ['container', 'external'],
-        metadata: {
-          external: true,
-          reduced: true,
-          collapsedLibrariesCount: hiddenExternalCount,
-          reductionCollapsed: true
-        }
-      });
-
-      for (const [sourceId, count] of aggregatedLibraryDeps.entries()) {
-        visibleEdges.push({
-          id: `edge:reduction:dep:${sourceId}->${COLLAPSED_LIBRARIES_NODE_ID}`,
-          source: sourceId,
-          target: COLLAPSED_LIBRARIES_NODE_ID,
-          type: 'dependency',
-          layer: 'dependency',
-          metadata: {
-            reduced: true,
-            collapsedDependencyCount: count,
-            confidence: 0.66,
-            provenance: 'heuristic',
-            reason: `${count} hidden library dependenc${count === 1 ? 'y' : 'ies'}`
-          }
-        });
-      }
-    }
-  }
-
-  return {
-    ...source,
-    nodes: visibleNodes,
-    edges: visibleEdges
-  };
-}
-
-/**
- * Filters graph to currently enabled layers.
- */
-function buildLayerFilteredGraphData(source: GraphData): GraphData {
-  const visibleLayers = new Set<GraphLayer>();
-  if (layerVisibility.structural) {
-    visibleLayers.add('structural');
-  }
-  if (layerVisibility.dependency) {
-    visibleLayers.add('dependency');
-  }
-  if (layerVisibility.dataflow) {
-    visibleLayers.add('dataflow');
-  }
-  if (layerVisibility.execution) {
-    visibleLayers.add('execution');
-  }
-
-  const edges = source.edges.filter((edge) => visibleLayers.has(edge.layer));
-  const connectedNodeIds = new Set<string>();
-  for (const edge of edges) {
-    connectedNodeIds.add(edge.source);
-    connectedNodeIds.add(edge.target);
-  }
-
-  const nodes = source.nodes.filter(
-    (node) => node.layers.some((layer) => visibleLayers.has(layer)) || connectedNodeIds.has(node.id)
-  );
-
-  return {
-    ...source,
-    nodes,
-    edges
-  };
-}
-
-/**
- * Filters graph by abstraction level and synthesizes aggregate edges when needed.
- */
-function buildAbstractionFilteredGraphData(source: GraphData): GraphData {
-  const level = graphAbstraction.effectiveLevel;
-  if (level === 'detail') {
-    return source;
-  }
-
-  const allowedTypes =
-    level === 'system'
-      ? new Set<GraphNodeType>(['module'])
-      : new Set<GraphNodeType>(['module', 'class', 'function']);
-
-  const nodeById = new Map(source.nodes.map((node) => [node.id, node]));
-  const visibleNodes = source.nodes.filter((node) => allowedTypes.has(node.type));
-  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
-
-  const visibleEdges: GraphEdge[] = [];
-  const aggregatedEdges = new Map<string, { source: string; target: string; type: GraphEdgeType; layer: GraphLayer; count: number }>();
-
-  for (const edge of source.edges) {
-    const sourceVisible = visibleNodeIds.has(edge.source);
-    const targetVisible = visibleNodeIds.has(edge.target);
-
-    if (sourceVisible && targetVisible) {
-      visibleEdges.push(edge);
-      continue;
-    }
-
-    const sourceAnchor = resolveAbstractionAnchor(nodeById.get(edge.source), level);
-    const targetAnchor = resolveAbstractionAnchor(nodeById.get(edge.target), level);
-
-    if (!sourceAnchor || !targetAnchor || sourceAnchor === targetAnchor) {
-      continue;
-    }
-
-    if (!visibleNodeIds.has(sourceAnchor) || !visibleNodeIds.has(targetAnchor)) {
-      continue;
-    }
-
-    const aggregateType: GraphEdgeType = edge.type === 'dataflow' ? 'dataflow' : 'call';
-    const aggregateLayer: GraphLayer = edge.type === 'dataflow' ? 'dataflow' : 'dependency';
-    const key = `${aggregateType}:${sourceAnchor}->${targetAnchor}`;
-    const existing = aggregatedEdges.get(key);
-
-    if (existing) {
-      existing.count += 1;
-      continue;
-    }
-
-    aggregatedEdges.set(key, {
-      source: sourceAnchor,
-      target: targetAnchor,
-      type: aggregateType,
-      layer: aggregateLayer,
-      count: 1
-    });
-  }
-
-  for (const [key, aggregate] of aggregatedEdges.entries()) {
-    visibleEdges.push({
-      id: `edge:abstraction:${key}`,
-      source: aggregate.source,
-      target: aggregate.target,
-      type: aggregate.type,
-      layer: aggregate.layer,
-      metadata: {
-        reduced: true,
-        abstractionAggregate: true,
-        aggregateCount: aggregate.count,
-        confidence: 0.58,
-        provenance: 'heuristic',
-        reason: `${aggregate.count} relation${aggregate.count === 1 ? '' : 's'} aggregated at ${level} level.`
-      }
-    });
-  }
-
-  return {
-    ...source,
-    nodes: visibleNodes,
-    edges: visibleEdges
-  };
-}
-
-/**
- * Resolves a node's abstraction anchor at a target abstraction level.
- */
-function resolveAbstractionAnchor(node: GraphNode | undefined, level: AbstractionLevel): string | undefined {
-  if (!node) {
-    return undefined;
-  }
-
-  if (level === 'system') {
-    if (node.type === 'module') {
-      return node.id;
-    }
-
-    return getModuleNodeId(node);
-  }
-
-  if (level === 'function') {
-    if (node.type === 'module' || node.type === 'class' || node.type === 'function') {
-      return node.id;
-    }
-
-    if (node.type === 'variable') {
-      return getFunctionNodeId(node) ?? getModuleNodeId(node);
-    }
-  }
-
-  return node.id;
-}
-
-/**
- * Recomputes flow definitions and refreshes highlights under active filters.
- */
-function applyFlowFilters(): void {
-  if (!latestDisplayedGraphData) {
-    flowDefinitions = [];
-    selectedFlowId = undefined;
-    selectedStepIndex = undefined;
-    renderFlowSidebar();
-    applyFlowHighlighting();
-    return;
-  }
-
-  stopPlayback();
-  if (callPathExplorer.enabled && callPathExplorer.entryNodeId) {
-    flowDefinitions = buildCallPathsFromEntry(latestDisplayedGraphData, flowFilters, callPathExplorer);
-    const branchPoints = countBranchPoints(latestDisplayedGraphData, flowDefinitions);
-    callPathStatus.textContent = [
-      `Entry mode: ${flowDefinitions.length} path${flowDefinitions.length === 1 ? '' : 's'} discovered`,
-      `Entry: ${nodeCatalog.get(callPathExplorer.entryNodeId)?.name ?? callPathExplorer.entryNodeId}`,
-      `Max depth: ${callPathExplorer.maxDepth}`,
-      `Branch points touched: ${branchPoints}`
-    ].join('\n');
-  } else {
-    flowDefinitions = buildFlowDefinitions(latestDisplayedGraphData, flowFilters);
-    callPathStatus.textContent = 'Auto mode: discovering broad flow patterns.';
-  }
-
-  if (selectedFlowId && !flowDefinitions.some((flow) => flow.id === selectedFlowId)) {
-    selectedFlowId = undefined;
-    selectedStepIndex = undefined;
-  }
-
-  renderFlowSidebar();
-  applyFlowHighlighting();
-}
-
-/**
- * Builds call paths rooted at a selected entry function.
- */
-function buildCallPathsFromEntry(
-  graphData: GraphData,
-  filters: FlowFilters,
-  explorer: CallPathExplorerState
-): FlowDefinition[] {
-  const functionNodes = graphData.nodes.filter((node) => node.type === 'function');
-  const functionIds = new Set(functionNodes.map((node) => node.id));
-  if (!functionIds.has(explorer.entryNodeId)) {
-    return [];
-  }
-
-  const adjacency = new Map<string, string[]>();
-  for (const id of functionIds) {
-    adjacency.set(id, []);
-  }
-
-  const callEdges = graphData.edges.filter(
-    (edge) => edge.type === 'call' && getEdgeConfidence(edge) >= filters.minConfidence
-  );
-  for (const edge of callEdges) {
-    if (!functionIds.has(edge.source) || !functionIds.has(edge.target)) {
-      continue;
-    }
-    adjacency.get(edge.source)?.push(edge.target);
-  }
-
-  const nameById = new Map(functionNodes.map((node) => [node.id, node.name]));
-  const paths: string[][] = [];
-  const signatures = new Set<string>();
-  const maxPaths = 260;
-  const maxDepth = clamp(explorer.maxDepth, 2, 14);
-
-  const appendPath = (path: string[]): void => {
-    if (path.length === 0 || paths.length >= maxPaths) {
-      return;
-    }
-
-    const signature = path.join('>');
-    if (signatures.has(signature)) {
-      return;
-    }
-
-    signatures.add(signature);
-    paths.push(path);
-  };
-
-  const walk = (path: string[], currentId: string, visited: Set<string>): void => {
-    if (paths.length >= maxPaths) {
-      return;
-    }
-
-    const nextCandidates = prioritizeFlowCandidates(
-      (adjacency.get(currentId) ?? []).filter((candidate) => !visited.has(candidate)),
-      new Map([...adjacency.entries()].map(([id, targets]) => [id, targets.length])),
-      new Map<string, number>(),
-      nameById
-    );
-
-    if (nextCandidates.length === 0 || path.length >= maxDepth) {
-      appendPath(path);
-      return;
-    }
-
-    for (const nextId of nextCandidates) {
-      visited.add(nextId);
-      walk([...path, nextId], nextId, visited);
-      visited.delete(nextId);
-      if (paths.length >= maxPaths) {
-        break;
-      }
-    }
-  };
-
-  walk([explorer.entryNodeId], explorer.entryNodeId, new Set<string>([explorer.entryNodeId]));
-  if (paths.length === 0) {
-    appendPath([explorer.entryNodeId]);
-  }
-
-  return paths
-    .map((nodeIds, index) => {
-      const firstName = nameById.get(nodeIds[0]) ?? nodeIds[0];
-      const lastName = nameById.get(nodeIds[nodeIds.length - 1]) ?? nodeIds[nodeIds.length - 1];
-      const name =
-        nodeIds.length === 1
-          ? firstName
-          : nodeIds.length === 2
-            ? `${firstName} -> ${lastName}`
-            : `${firstName} -> ${lastName} (+${nodeIds.length - 2})`;
-
-      const edgeIds = nodeIds
-        .slice(0, -1)
-        .map((sourceId, edgeIndex) => callEdgeByPair.get(flowPairKey(sourceId, nodeIds[edgeIndex + 1])))
-        .filter((edgeId): edgeId is string => typeof edgeId === 'string');
-
-      return {
-        id: `entry-flow-${index + 1}`,
-        name,
-        nodeIds,
-        edgeIds
-      };
-    })
-    .filter((flow) => flow.nodeIds.length >= filters.minSteps)
-    .slice(0, 80);
-}
-
-  /**
-   * Counts branch nodes touched by the current set of call paths.
-   */
-function countBranchPoints(graphData: GraphData, flows: FlowDefinition[]): number {
-  if (flows.length === 0) {
-    return 0;
-  }
-
-  const functionIds = new Set(graphData.nodes.filter((node) => node.type === 'function').map((node) => node.id));
-  const outdegree = new Map<string, number>();
-  for (const id of functionIds) {
-    outdegree.set(id, 0);
-  }
-
-  for (const edge of graphData.edges) {
-    if (edge.type !== 'call' || !functionIds.has(edge.source) || !functionIds.has(edge.target)) {
-      continue;
-    }
-
-    outdegree.set(edge.source, (outdegree.get(edge.source) ?? 0) + 1);
-  }
-
-  const branchNodes = new Set<string>();
-  for (const flow of flows) {
-    for (const nodeId of flow.nodeIds) {
-      if ((outdegree.get(nodeId) ?? 0) > 1) {
-        branchNodes.add(nodeId);
-      }
-    }
-  }
-
-  return branchNodes.size;
-}
-
-/**
- * Refreshes module filter dropdown options and preserves selection when possible.
- */
-function syncModuleFilterOptions(graphData: GraphData): void {
-  const previousValue = flowModule.value || flowFilters.moduleId;
-  const options = [{ value: 'all', label: 'All modules' }];
-
-  graphData.nodes
-    .filter((node) => node.type === 'module' && !node.metadata?.external)
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .forEach((moduleNode) => {
-      options.push({ value: moduleNode.id, label: moduleNode.name });
-    });
-
-  flowModule.replaceChildren();
-  options.forEach((optionData) => {
-    const option = document.createElement('option');
-    option.value = optionData.value;
-    option.textContent = optionData.label;
-    flowModule.appendChild(option);
-  });
-
-  const resolvedValue = options.some((option) => option.value === previousValue) ? previousValue : 'all';
-  flowModule.value = resolvedValue;
-  flowFilters.moduleId = resolvedValue;
-}
-
-/**
- * Refreshes focus-file dropdown options and preserves selection when possible.
- */
-function syncFocusFileOptions(graphData: GraphData): void {
-  const previousValue = focusFile.value || focusFilters.moduleNodeId;
-  const options = [{ value: 'all', label: 'All files' }];
-
-  graphData.nodes
-    .filter((node) => node.type === 'module' && !node.metadata?.external)
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .forEach((moduleNode) => {
-      options.push({ value: moduleNode.id, label: moduleNode.name });
-    });
-
-  focusFile.replaceChildren();
-  options.forEach((optionData) => {
-    const option = document.createElement('option');
-    option.value = optionData.value;
-    option.textContent = optionData.label;
-    focusFile.appendChild(option);
-  });
-
-  const resolvedValue = options.some((option) => option.value === previousValue) ? previousValue : 'all';
-  focusFile.value = resolvedValue;
-  focusFilters.moduleNodeId = resolvedValue;
-}
-
-/**
- * Synchronizes graph-edit form selectors with current graph nodes.
- */
-function syncGraphEditOptions(graphData: GraphData): void {
-  const previousCreateModule = editCreateModule.value;
-  const previousMoveModule = editMoveModule.value;
-  const previousConnectSource = editConnectSource.value;
-  const previousConnectTarget = editConnectTarget.value;
-
-  const moduleOptions = graphData.nodes
-    .filter((node) => node.type === 'module' && !node.metadata?.external)
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const functionOptions = graphData.nodes
-    .filter((node) => node.type === 'function')
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  applySelectOptions(
-    editCreateModule,
-    [{ value: '', label: 'Select module' }, ...moduleOptions.map((node) => ({ value: node.id, label: node.name }))],
-    previousCreateModule
-  );
-  applySelectOptions(
-    editMoveModule,
-    [{ value: '', label: 'Select module' }, ...moduleOptions.map((node) => ({ value: node.id, label: node.name }))],
-    previousMoveModule
-  );
-  applySelectOptions(
-    editConnectSource,
-    [{ value: '', label: 'Select source' }, ...functionOptions.map((node) => ({ value: node.id, label: node.name }))],
-    previousConnectSource
-  );
-  applySelectOptions(
-    editConnectTarget,
-    [{ value: '', label: 'Select target' }, ...functionOptions.map((node) => ({ value: node.id, label: node.name }))],
-    previousConnectTarget
-  );
-}
-
-/**
- * Replaces select options and restores a preferred value when available.
- */
-function applySelectOptions(
-  select: HTMLSelectElement,
-  options: Array<{ value: string; label: string }>,
-  preferredValue: string
-): void {
-  select.replaceChildren();
-  options.forEach((optionData) => {
-    const option = document.createElement('option');
-    option.value = optionData.value;
-    option.textContent = optionData.label;
-    select.appendChild(option);
-  });
-
-  const resolved = options.some((option) => option.value === preferredValue)
-    ? preferredValue
-    : options[0]?.value ?? '';
-  select.value = resolved;
-}
-
-/**
- * Parses comma-separated text input into trimmed non-empty tokens.
- */
-function parseCsvValues(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-}
-
-  /**
-   * Synchronizes call-path and data-flow selector options.
-   */
-function syncExplorationOptions(graphData: GraphData): void {
-  const previousEntry = callPathExplorer.entryNodeId || callPathEntry.value;
-  const previousDataFlowSource = dataFlowExplorer.sourceNodeId || dataFlowSource.value;
-
-  const functionNodes = graphData.nodes
-    .filter((node) => node.type === 'function')
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const dataFlowNodes = graphData.nodes
-    .filter((node) => node.layers.includes('dataflow'))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  applySelectOptions(
-    callPathEntry,
-    [{ value: '', label: 'Select entry function' }, ...functionNodes.map((node) => ({ value: node.id, label: node.name }))],
-    previousEntry
-  );
-  applySelectOptions(
-    dataFlowSource,
-    [{ value: '', label: 'Select source node' }, ...dataFlowNodes.map((node) => ({ value: node.id, label: `${node.name} (${node.type})` }))],
-    previousDataFlowSource
-  );
-
-  callPathExplorer.entryNodeId = callPathEntry.value;
-  dataFlowExplorer.sourceNodeId = dataFlowSource.value;
-}
-
-/**
- * Synchronizes journey entry selector options for file or code mode.
- */
-function syncJourneyEntryOptions(graphData: GraphData): void {
-  const previousEntry = journeyState.entryNodeId || journeyEntrySelect.value;
-  const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
-
-  if (journeyState.mode === 'file') {
-    const moduleNodes = graphData.nodes
-      .filter((node) => node.type === 'module')
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    applySelectOptions(
-      journeyEntrySelect,
-      [
-        { value: '', label: 'Select entry file/module' },
-        ...moduleNodes.map((node) => ({ value: node.id, label: node.name }))
-      ],
-      previousEntry
-    );
-  } else {
-    const functionNodes = graphData.nodes
-      .filter((node) => node.type === 'function')
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    applySelectOptions(
-      journeyEntrySelect,
-      [
-        { value: '', label: 'Select entry function' },
-        ...functionNodes.map((node) => {
-          const moduleName = getModuleNodeId(node)
-            ? nodeById.get(getModuleNodeId(node) ?? '')?.name
-            : undefined;
-          const label = moduleName ? `${node.name} (${moduleName})` : node.name;
-          return { value: node.id, label };
-        })
-      ],
-      previousEntry
-    );
-  }
-
-  journeyState.entryNodeId = journeyEntrySelect.value;
-}
-
-/**
- * Finds a likely function entry point inside a selected module.
- */
-function findPreferredFunctionEntryForModule(graphData: GraphData, moduleNodeId: string): string | undefined {
-  const candidates = graphData.nodes.filter(
-    (node) => node.type === 'function' && getModuleNodeId(node) === moduleNodeId
-  );
-
-  if (candidates.length === 0) {
-    return undefined;
-  }
-
-  const entryLikeNames = ['main', 'run', 'start', 'app', 'bootstrap', 'init'];
-  const ranked = [...candidates].sort((a, b) => {
-    const aLower = a.name.toLowerCase();
-    const bLower = b.name.toLowerCase();
-    const aScore = entryLikeNames.some((token) => aLower === token || aLower.endsWith(`_${token}`)) ? 2 : 0;
-    const bScore = entryLikeNames.some((token) => bLower === token || bLower.endsWith(`_${token}`)) ? 2 : 0;
-
-    if (bScore !== aScore) {
-      return bScore - aScore;
-    }
-
-    const lineA = typeof a.line === 'number' ? a.line : Number.MAX_SAFE_INTEGER;
-    const lineB = typeof b.line === 'number' ? b.line : Number.MAX_SAFE_INTEGER;
-    if (lineA !== lineB) {
-      return lineA - lineB;
-    }
-
-    return a.name.localeCompare(b.name);
-  });
-
-  return ranked[0]?.id;
-}
-
-/**
- * Applies current focus filters and dependency highlighting overlays.
- */
-function applyFocusFilters(): void {
-  const keepNodeIds = new Set<string>();
-  const keepEdgeIds = new Set<string>();
-
-  if (focusFilters.moduleNodeId !== 'all') {
-    keepNodeIds.add(focusFilters.moduleNodeId);
-
-    for (const [nodeId, node] of nodeCatalog.entries()) {
-      if (node.id === focusFilters.moduleNodeId) {
-        keepNodeIds.add(nodeId);
-        continue;
-      }
-
-      if (getModuleNodeId(node) === focusFilters.moduleNodeId) {
-        keepNodeIds.add(nodeId);
-      }
-    }
-
-    graph.edges().forEach((edge) => {
-      if (keepNodeIds.has(edge.source().id()) && keepNodeIds.has(edge.target().id())) {
-        keepEdgeIds.add(edge.id());
-      }
-    });
-
-    applyScopeMasking(keepNodeIds, keepEdgeIds);
-  }
-
-  applyDependencyHighlighting();
-}
-
-/**
- * Masks nodes and edges that are outside the current kept sets.
- */
-function applyScopeMasking(keepNodeIds: Set<string>, keepEdgeIds: Set<string>): void {
-  const hide = declutterState.visibilityMode === 'hide';
-  const maskClass = hide ? 'hidden-by-scope' : 'dimmed';
-
-  graph.nodes().forEach((node) => {
-    if (!keepNodeIds.has(node.id())) {
-      node.addClass(maskClass);
-    }
-  });
-
-  graph.edges().forEach((edge) => {
-    if (!keepEdgeIds.has(edge.id())) {
-      edge.addClass(maskClass);
-    }
-  });
-}
-
-/**
- * Applies selected-node dependency traversal highlighting and status text.
- */
-function applyDependencyHighlighting(): void {
-  if (journeyState.enabled) {
-    latestDependencyAnalysis = undefined;
-    if (selectedNodeId) {
-      graph.getElementById(selectedNodeId).addClass('node-selected').removeClass('dimmed');
-      const node = nodeCatalog.get(selectedNodeId);
-      dependencyStatus.textContent = node
-        ? `Journey active: ${journeyState.mode === 'file' ? 'File Flow' : 'Code Flow'} step on ${node.name}`
-        : 'Journey active: step-through traversal';
-    } else {
-      dependencyStatus.textContent = 'Journey active: choose Start to begin step-through traversal.';
-    }
-    updateNodeInspector();
-    return;
-  }
-
-  if (!selectedNodeId) {
-    latestDependencyAnalysis = undefined;
-    dependencyStatus.textContent = 'Select a node to analyze dependency impact.';
-    applyDataFlowHighlighting();
-    updateNodeInspector();
-    return;
-  }
-
-  const selectedNode = graph.getElementById(selectedNodeId);
-  if (selectedNode.length === 0) {
-    latestDependencyAnalysis = undefined;
-    dependencyStatus.textContent = 'Selected node is not visible in the current graph filters.';
-    applyDataFlowHighlighting();
-    updateNodeInspector();
-    return;
-  }
-
-  selectedNode.addClass('node-selected');
-
-  const analysis = analyzeDependencyTraversal(selectedNodeId, dependencyTraversal.maxHops);
-  latestDependencyAnalysis = analysis;
-
-  const showUpstream = dependencyTraversal.direction !== 'downstream';
-  const showDownstream = dependencyTraversal.direction !== 'upstream';
-
-  if (showUpstream) {
-    for (const nodeId of analysis.upstreamNodeIds) {
-      graph.getElementById(nodeId).addClass('node-incoming').removeClass('dimmed');
-    }
-    for (const edgeId of analysis.upstreamEdgeIds) {
-      graph.getElementById(edgeId).addClass('edge-incoming').removeClass('dimmed');
-    }
-  }
-
-  if (showDownstream) {
-    for (const nodeId of analysis.downstreamNodeIds) {
-      graph.getElementById(nodeId).addClass('node-outgoing').removeClass('dimmed');
-    }
-    for (const edgeId of analysis.downstreamEdgeIds) {
-      graph.getElementById(edgeId).addClass('edge-outgoing').removeClass('dimmed');
-    }
-  }
-
-  // Impact analysis is always based on transitive upstream dependents.
-  for (const nodeId of analysis.upstreamNodeIds) {
-    graph.getElementById(nodeId).addClass('node-impact').removeClass('dimmed');
-  }
-  for (const edgeId of analysis.upstreamEdgeIds) {
-    graph.getElementById(edgeId).addClass('edge-impact').removeClass('dimmed');
-  }
-
-  dependencyStatus.textContent = [
-    `Traversal: ${dependencyTraversal.direction}, hops <= ${dependencyTraversal.maxHops}`,
-    `Upstream dependents: ${analysis.upstreamNodeIds.size}`,
-    `Downstream dependencies: ${analysis.downstreamNodeIds.size}`,
-    `Blast radius: ${analysis.blastRadiusNodeCount} node${analysis.blastRadiusNodeCount === 1 ? '' : 's'}`
-  ].join('\n');
-
-  if (!focusFilters.neighborhoodOnly) {
-    applyDataFlowHighlighting();
-    updateNodeInspector();
-    return;
-  }
-
-  const neighborhoodNodeIds = new Set<string>([
-    selectedNodeId,
-    ...analysis.upstreamNodeIds,
-    ...analysis.downstreamNodeIds
-  ]);
-
-  const selectedNodeMeta = nodeCatalog.get(selectedNodeId);
-  const moduleNodeId = selectedNodeMeta ? getModuleNodeId(selectedNodeMeta) : undefined;
-  if (moduleNodeId) {
-    neighborhoodNodeIds.add(moduleNodeId);
-  }
-
-  const neighborhoodEdgeIds = new Set<string>([
-    ...analysis.upstreamEdgeIds,
-    ...analysis.downstreamEdgeIds
-  ]);
-
-  for (const trailNodeId of getDrillTrailNodeIds()) {
-    neighborhoodNodeIds.add(trailNodeId);
-  }
-
-  for (const trailEdgeId of getDrillTrailEdgeIds()) {
-    neighborhoodEdgeIds.add(trailEdgeId);
-  }
-
-  applyScopeMasking(neighborhoodNodeIds, neighborhoodEdgeIds);
-
-  applyDataFlowHighlighting();
-  updateNodeInspector();
-}
-
-/**
- * Computes upstream/downstream dependency traversal snapshot from a root node.
- */
-function analyzeDependencyTraversal(
-  rootNodeId: string,
-  maxHops: number
-): DependencyAnalysisSnapshot {
-  const safeMaxHops = clamp(maxHops, 1, 8);
-  const upstreamNodeIds = new Set<string>();
-  const downstreamNodeIds = new Set<string>();
-  const upstreamEdgeIds = new Set<string>();
-  const downstreamEdgeIds = new Set<string>();
-
-  const traverse = (
-    direction: 'upstream' | 'downstream',
-    nodeSet: Set<string>,
-    edgeSet: Set<string>
-  ): void => {
-    const visited = new Set<string>([rootNodeId]);
-    const queue: Array<{ id: string; depth: number }> = [{ id: rootNodeId, depth: 0 }];
-
-    while (queue.length > 0) {
-      const item = queue.shift();
-      if (!item) {
-        continue;
-      }
-
-      if (item.depth >= safeMaxHops) {
-        continue;
-      }
-
-      const node = graph.getElementById(item.id);
-      if (node.length === 0) {
-        continue;
-      }
-
-      const edgeCollection = direction === 'upstream' ? node.incomers('edge') : node.outgoers('edge');
-      edgeCollection.forEach((edge) => {
-        if (!isDependencyTraversableEdge(edge)) {
-          return;
-        }
-
-        const nextNodeId = direction === 'upstream' ? edge.source().id() : edge.target().id();
-        if (!nextNodeId) {
-          return;
-        }
-
-        edgeSet.add(edge.id());
-
-        if (visited.has(nextNodeId)) {
-          return;
-        }
-
-        visited.add(nextNodeId);
-        nodeSet.add(nextNodeId);
-        queue.push({ id: nextNodeId, depth: item.depth + 1 });
-      });
-    }
-  };
-
-  traverse('upstream', upstreamNodeIds, upstreamEdgeIds);
-  traverse('downstream', downstreamNodeIds, downstreamEdgeIds);
-
-  return {
-    upstreamNodeIds,
-    downstreamNodeIds,
-    upstreamEdgeIds,
-    downstreamEdgeIds,
-    blastRadiusNodeCount: upstreamNodeIds.size
-  };
-}
-
-/**
- * Returns whether an edge type is allowed in dependency traversal analysis.
- */
-function isDependencyTraversableEdge(edge: cytoscape.EdgeSingular): boolean {
-  const edgeType = String(edge.data('type'));
-  return (
-    edgeType === 'call' ||
-    edgeType === 'dependency' ||
-    edgeType === 'class-usage' ||
-    edgeType === 'dataflow'
-  );
-}
-
-/**
- * Applies data-flow reachability highlighting from the selected source node.
- */
-function applyDataFlowHighlighting(): void {
-  if (journeyState.enabled) {
-    latestDataFlowAnalysis = undefined;
-    return;
-  }
-
-  if (!dataFlowExplorer.enabled) {
-    latestDataFlowAnalysis = undefined;
-    return;
-  }
-
-  const sourceNodeId = dataFlowExplorer.sourceNodeId;
-  if (!sourceNodeId) {
-    latestDataFlowAnalysis = undefined;
-    dataFlowStatus.textContent = 'Select a source node to trace data transformations.';
-    return;
-  }
-
-  const sourceNode = graph.getElementById(sourceNodeId);
-  if (sourceNode.length === 0) {
-    latestDataFlowAnalysis = undefined;
-    dataFlowStatus.textContent = 'Selected data-flow source is not visible in current filters.';
-    return;
-  }
-
-  const analysis = analyzeDataFlowTraversal(
-    sourceNodeId,
-    dataFlowExplorer.maxHops,
-    dataFlowExplorer.direction
-  );
-  latestDataFlowAnalysis = analysis;
-
-  for (const nodeId of analysis.nodeIds) {
-    graph.getElementById(nodeId).addClass('node-dataflow').removeClass('dimmed');
-  }
-  for (const edgeId of analysis.edgeIds) {
-    graph.getElementById(edgeId).addClass('edge-dataflow').removeClass('dimmed');
-  }
-
-  dataFlowStatus.textContent = [
-    `Source: ${nodeCatalog.get(sourceNodeId)?.name ?? sourceNodeId}`,
-    `Direction: ${dataFlowExplorer.direction}, hops <= ${dataFlowExplorer.maxHops}`,
-    `Reachable nodes: ${analysis.nodeIds.size}`,
-    `Transformations traversed: ${analysis.transformationCount}`,
-    `Forward: ${analysis.forwardCount}, Backward: ${analysis.backwardCount}`
-  ].join('\n');
-}
-
-/**
- * Computes data-flow traversal in forward, backward, or bidirectional modes.
- */
-function analyzeDataFlowTraversal(
-  sourceNodeId: string,
-  maxHops: number,
-  direction: DataFlowDirection
-): DataFlowAnalysisSnapshot {
-  const safeMaxHops = clamp(maxHops, 1, 10);
-  const nodeIds = new Set<string>([sourceNodeId]);
-  const edgeIds = new Set<string>();
-  let forwardCount = 0;
-  let backwardCount = 0;
-
-  const traverse = (mode: 'forward' | 'backward'): number => {
-    const visited = new Set<string>([sourceNodeId]);
-    const queue: Array<{ id: string; depth: number }> = [{ id: sourceNodeId, depth: 0 }];
-    let traversed = 0;
-
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (!current || current.depth >= safeMaxHops) {
-        continue;
-      }
-
-      const node = graph.getElementById(current.id);
-      if (node.length === 0) {
-        continue;
-      }
-
-      const edges = mode === 'forward' ? node.outgoers('edge') : node.incomers('edge');
-      edges.forEach((edge) => {
-        if (!isDataFlowTraversableEdge(edge)) {
-          return;
-        }
-
-        const nextNodeId = mode === 'forward' ? edge.target().id() : edge.source().id();
-        if (!nextNodeId) {
-          return;
-        }
-
-        edgeIds.add(edge.id());
-        nodeIds.add(nextNodeId);
-        traversed += 1;
-
-        if (visited.has(nextNodeId)) {
-          return;
-        }
-
-        visited.add(nextNodeId);
-        queue.push({ id: nextNodeId, depth: current.depth + 1 });
-      });
-    }
-
-    return traversed;
-  };
-
-  if (direction === 'forward' || direction === 'both') {
-    forwardCount = traverse('forward');
-  }
-
-  if (direction === 'backward' || direction === 'both') {
-    backwardCount = traverse('backward');
-  }
-
-  return {
-    sourceNodeId,
-    nodeIds,
-    edgeIds,
-    forwardCount,
-    backwardCount,
-    transformationCount: edgeIds.size
-  };
-}
-
-/**
- * Returns whether an edge contributes to data-flow traversal.
- */
-function isDataFlowTraversableEdge(edge: cytoscape.EdgeSingular): boolean {
-  const edgeType = String(edge.data('type'));
-  return edgeType === 'dataflow' || edgeType === 'call';
-}
-
-/**
- * Requests source navigation for a selected graph node.
- */
-function openNodeSource(nodeId: string): void {
-  const node = nodeCatalog.get(nodeId);
-  if (!node || !node.filePath || typeof node.line !== 'number') {
-    return;
-  }
-
-  vscode.postMessage({
-    type: 'navigateToNode',
-    nodeId
-  });
-}
-
-/**
- * Updates the node inspector panel with current metrics and runtime details.
- */
-function updateNodeInspector(): void {
-  if (!selectedNodeId) {
-    nodeInspector.textContent = 'Click a node to inspect dependencies.';
-    openSourceButton.disabled = true;
-    return;
-  }
-
-  const node = nodeCatalog.get(selectedNodeId);
-  if (!node) {
-    nodeInspector.textContent = 'Selected node is no longer available.';
-    openSourceButton.disabled = true;
-    return;
-  }
-
-  const cyNode = graph.getElementById(selectedNodeId);
-  const incomingCount = cyNode.length > 0 ? cyNode.incomers('edge').length : 0;
-  const outgoingCount = cyNode.length > 0 ? cyNode.outgoers('edge').length : 0;
-
-  const lines = [
-    `Node: ${node.name}`,
-    `Type: ${node.type}`,
-    `Incoming: ${incomingCount}`,
-    `Outgoing: ${outgoingCount}`
-  ];
-
-  if (latestDependencyAnalysis && selectedNodeId) {
-    lines.push(`Transitive upstream: ${latestDependencyAnalysis.upstreamNodeIds.size}`);
-    lines.push(`Transitive downstream: ${latestDependencyAnalysis.downstreamNodeIds.size}`);
-    lines.push(`Blast radius: ${latestDependencyAnalysis.blastRadiusNodeCount}`);
-  }
-
-  if (latestDataFlowAnalysis && latestDataFlowAnalysis.nodeIds.has(selectedNodeId)) {
-    lines.push(`Data-flow reach: yes`);
-    lines.push(`Data transformations: ${latestDataFlowAnalysis.transformationCount}`);
-  }
-
-  const moduleNodeId = getModuleNodeId(node);
-  if (moduleNodeId) {
-    const moduleNode = nodeCatalog.get(moduleNodeId);
-    if (moduleNode?.name) {
-      lines.push(`File: ${moduleNode.name}`);
-    }
-  }
-
-  if (node.filePath && typeof node.line === 'number') {
-    lines.push(`Location: ${node.filePath}:${node.line}`);
-  }
-
-  const runtimeEvent = latestExecutionEventByNodeId.get(node.id);
-  if (runtimeEvent) {
-    lines.push(`Runtime: ${runtimeEvent.eventType} @ step ${runtimeEvent.index + 1}`);
-
-    if (runtimeEvent.inputs && Object.keys(runtimeEvent.inputs).length > 0) {
-      lines.push(`Inputs: ${formatRuntimeObject(runtimeEvent.inputs)}`);
-    }
-
-    if (runtimeEvent.locals && Object.keys(runtimeEvent.locals).length > 0) {
-      lines.push(`Intermediate: ${formatRuntimeObject(runtimeEvent.locals)}`);
-    }
-
-    if (runtimeEvent.eventType === 'return') {
-      lines.push(`Output: ${formatRuntimeValue(runtimeEvent.output)}`);
-    }
-  }
-
-  nodeInspector.textContent = lines.join('\n');
-  openSourceButton.disabled = !(node.filePath && typeof node.line === 'number');
-}
-
-/**
- * Starts timed flow-step playback.
- */
-function startPlayback(): void {
-  const flow = getSelectedFlow();
-  if (!flow || flow.nodeIds.length === 0) {
-    return;
-  }
-
-  if (typeof selectedStepIndex !== 'number') {
-    selectedStepIndex = 0;
-  }
-
-  isPlaybackRunning = true;
-  flowPlayButton.textContent = 'Pause';
-  playbackTimer = window.setInterval(() => {
-    const advanced = advanceStep();
-    if (!advanced) {
-      stopPlayback();
-    }
-  }, 760);
-
-  updatePlaybackControls();
-}
-
-/**
- * Stops flow-step playback.
- */
-function stopPlayback(): void {
-  if (playbackTimer) {
-    clearInterval(playbackTimer);
-    playbackTimer = undefined;
-  }
-
-  isPlaybackRunning = false;
-  flowPlayButton.textContent = 'Play';
-  updatePlaybackControls();
-}
-
-/**
- * Advances the selected flow by one step.
- */
-function advanceStep(): boolean {
-  const flow = getSelectedFlow();
-  if (!flow || flow.nodeIds.length === 0) {
-    return false;
-  }
-
-  const currentIndex = typeof selectedStepIndex === 'number' ? selectedStepIndex : 0;
-  if (currentIndex >= flow.nodeIds.length - 1) {
-    return false;
-  }
-
-  selectedStepIndex = currentIndex + 1;
-  renderFlowSteps(flow);
-  applyFlowHighlighting();
-  focusNode(flow.nodeIds[selectedStepIndex], true);
-  return true;
-}
-
-/**
- * Enables/disables flow playback controls based on current selection.
- */
-function updatePlaybackControls(): void {
-  const flow = getSelectedFlow();
-  const hasFlow = Boolean(flow && flow.nodeIds.length > 0);
-  const currentIndex = typeof selectedStepIndex === 'number' ? selectedStepIndex : 0;
-
-  flowPrevButton.disabled = !hasFlow || currentIndex <= 0;
-  flowNextButton.disabled = !hasFlow || !flow || currentIndex >= flow.nodeIds.length - 1;
-  flowPlayButton.disabled = !hasFlow;
-}
-
-/**
- * Resets runtime trace state before a new trace stream begins.
- */
-function resetExecutionTrace(entryFilePath: string): void {
-  stopExecutionPlayback();
-  executionEvents.splice(0, executionEvents.length);
-  executionCursor = -1;
-  latestExecutionEventByNodeId.clear();
-  clearDynamicExecutionEdges();
-
-  executionTraceRunning = true;
-  layerVisibility.execution = true;
-  layerExecutionToggle.checked = true;
-
-  executionStatus.textContent = `Tracing ${entryFilePath}...`;
-  executionNodeState.textContent = 'Waiting for runtime events...';
-  updateExecutionControls();
-  rerenderGraphFromSource();
-}
-
-/**
- * Ingests a runtime event and updates execution overlays.
- */
-function ingestExecutionEvent(traceEvent: ExecutionTraceEvent): void {
-  executionEvents.push(traceEvent);
-  executionCursor = executionEvents.length - 1;
-
-  if (traceEvent.nodeId) {
-    latestExecutionEventByNodeId.set(traceEvent.nodeId, traceEvent);
-  }
-
-  executionStatus.textContent = `Tracing... ${executionEvents.length} event${executionEvents.length === 1 ? '' : 's'}`;
-  applyExecutionOverlay(true);
-  updateExecutionControls();
-}
-
-/**
- * Finalizes runtime trace session state and summary status.
- */
-function completeExecutionTrace(summary: { totalEvents: number; exitCode?: number; stopped?: boolean }): void {
-  executionTraceRunning = false;
-  stopExecutionPlayback();
-
-  const parts: string[] = [];
-  if (summary.stopped) {
-    parts.push('stopped');
-  } else {
-    parts.push('complete');
-  }
-  parts.push(`${summary.totalEvents} events`);
-  if (typeof summary.exitCode === 'number') {
-    parts.push(`exit ${summary.exitCode}`);
-  }
-
-  executionStatus.textContent = `Trace ${parts.join(' | ')}`;
-  updateExecutionControls();
-  applyExecutionOverlay(false);
-}
-
-/**
- * Starts execution event playback animation.
- */
-function startExecutionPlayback(): void {
-  if (executionEvents.length === 0) {
-    return;
-  }
-
-  if (executionCursor < 0) {
-    executionCursor = 0;
-  }
-
-  isExecutionPlaybackRunning = true;
-  executionPlayButton.textContent = 'Pause';
-  updateExecutionControls();
-
-  executionPlaybackTimer = window.setInterval(() => {
-    const advanced = stepExecution(1, true);
-    if (!advanced) {
-      stopExecutionPlayback();
-    }
-  }, 520);
-}
-
-/**
- * Stops execution event playback animation.
- */
-function stopExecutionPlayback(): void {
-  if (executionPlaybackTimer) {
-    clearInterval(executionPlaybackTimer);
-    executionPlaybackTimer = undefined;
-  }
-
-  isExecutionPlaybackRunning = false;
-  executionPlayButton.textContent = 'Play';
-  updateExecutionControls();
-}
-
-/**
- * Moves execution cursor by delta and refreshes overlays.
- */
-function stepExecution(delta: number, autoFocus = true): boolean {
-  if (executionEvents.length === 0) {
-    return false;
-  }
-
-  const current = executionCursor < 0 ? 0 : executionCursor;
-  const next = Math.min(executionEvents.length - 1, Math.max(0, current + delta));
-  if (next === executionCursor) {
-    return false;
-  }
-
-  executionCursor = next;
-  applyExecutionOverlay(autoFocus);
-  updateExecutionControls();
-  return true;
-}
-
-/**
- * Enables/disables execution controls based on trace and cursor state.
- */
-function updateExecutionControls(): void {
-  const hasEvents = executionEvents.length > 0;
-  const hasCursor = executionCursor >= 0;
-
-  executionStartButton.disabled = executionTraceRunning;
-  executionStopButton.disabled = !executionTraceRunning;
-  executionPrevButton.disabled = !hasEvents || !hasCursor || executionCursor <= 0;
-  executionNextButton.disabled = !hasEvents || !hasCursor || executionCursor >= executionEvents.length - 1;
-  executionPlayButton.disabled = !hasEvents;
-  executionPlayButton.textContent = isExecutionPlaybackRunning ? 'Pause' : 'Play';
-}
-
-/**
- * Removes transient execution-path edges generated during playback.
- */
-function clearDynamicExecutionEdges(): void {
-  if (dynamicExecutionEdgeIds.size === 0) {
-    return;
-  }
-
-  for (const edgeId of dynamicExecutionEdgeIds) {
-    graph.getElementById(edgeId).remove();
-  }
-
-  dynamicExecutionEdgeIds.clear();
-}
-
-/**
- * Applies runtime execution highlighting for visited/current nodes and transitions.
- */
-function applyExecutionOverlay(autoFocus: boolean): void {
-  graph.nodes().removeClass('execution-visited execution-active');
-  graph.edges().removeClass('execution-traversed');
-  clearDynamicExecutionEdges();
-
-  if (!layerVisibility.execution || executionEvents.length === 0 || executionCursor < 0) {
-    updateExecutionNodeState(undefined);
-    updateNodeInspector();
-    return;
-  }
-
-  const terminalIndex = Math.min(executionCursor, executionEvents.length - 1);
-  const visitedNodeIds = new Set<string>();
-
-  for (let index = 0; index <= terminalIndex; index += 1) {
-    const traceEvent = executionEvents[index];
-    if (traceEvent?.nodeId && graph.getElementById(traceEvent.nodeId).length > 0) {
-      visitedNodeIds.add(traceEvent.nodeId);
-    }
-  }
-
-  for (const nodeId of visitedNodeIds) {
-    graph.getElementById(nodeId).addClass('execution-visited').removeClass('dimmed');
-  }
-
-  for (let index = 1; index <= terminalIndex; index += 1) {
-    const previous = executionEvents[index - 1];
-    const current = executionEvents[index];
-    if (!previous?.nodeId || !current?.nodeId || previous.nodeId === current.nodeId) {
-      continue;
-    }
-
-    const pairKey = flowPairKey(previous.nodeId, current.nodeId);
-    const existingEdgeId = anyEdgeByPair.get(pairKey);
-    if (existingEdgeId) {
-      graph.getElementById(existingEdgeId).addClass('execution-traversed').removeClass('dimmed');
-      continue;
-    }
-
-    const dynamicEdgeId = `edge:execution:path:${index}:${previous.nodeId}->${current.nodeId}`;
-    if (graph.getElementById(dynamicEdgeId).length === 0) {
-      graph.add({
-        data: {
-          id: dynamicEdgeId,
-          source: previous.nodeId,
-          target: current.nodeId,
-          type: 'execution-path'
-        }
-      });
-      dynamicExecutionEdgeIds.add(dynamicEdgeId);
-    }
-
-    graph.getElementById(dynamicEdgeId).addClass('execution-traversed').removeClass('dimmed');
-  }
-
-  const activeEvent = executionEvents[terminalIndex];
-  if (activeEvent?.nodeId && graph.getElementById(activeEvent.nodeId).length > 0) {
-    const activeNode = graph.getElementById(activeEvent.nodeId);
-    activeNode.addClass('execution-active').removeClass('dimmed');
-    if (autoFocus) {
-      focusNode(activeEvent.nodeId, true);
-    }
-  }
-
-  updateExecutionNodeState(activeEvent);
-  updateNodeInspector();
-  scheduleMinimapRender();
-}
-
-/**
- * Updates execution node-state panel for the current runtime event.
- */
-function updateExecutionNodeState(event: ExecutionTraceEvent | undefined): void {
-  if (!event) {
-    executionNodeState.textContent = executionEvents.length === 0
-      ? 'Run a trace to inspect inputs, outputs, and intermediate values.'
-      : 'Select an execution step to inspect runtime state.';
-    return;
-  }
-
-  const lines: string[] = [];
-  lines.push(`Step: ${event.index + 1}/${executionEvents.length}`);
-  lines.push(`Event: ${event.eventType}`);
-  lines.push(`Location: ${event.filePath}:${event.line}`);
-  lines.push(`Function: ${event.qualifiedName ?? event.functionName}`);
-
-  if (event.inputs && Object.keys(event.inputs).length > 0) {
-    lines.push(`Inputs: ${formatRuntimeObject(event.inputs)}`);
-  }
-
-  if (event.locals && Object.keys(event.locals).length > 0) {
-    lines.push(`Intermediate: ${formatRuntimeObject(event.locals)}`);
-  }
-
-  if (event.eventType === 'return') {
-    lines.push(`Output: ${formatRuntimeValue(event.output)}`);
-  }
-
-  if (event.eventType === 'exception' && event.exception) {
-    lines.push(`Exception: ${event.exception}`);
-  }
-
-  executionNodeState.textContent = lines.join('\n');
-}
-
-/**
- * Formats a runtime object for inspector display.
- */
-function formatRuntimeObject(value: Record<string, unknown>): string {
-  return formatRuntimeValue(value);
-}
-
-/**
- * Formats runtime values as compact JSON-like text.
- */
-function formatRuntimeValue(value: unknown): string {
-  try {
-    const json = JSON.stringify(value);
-    if (!json) {
-      return String(value);
-    }
-
-    return json.length > 260 ? `${json.slice(0, 257)}...` : json;
-  } catch {
-    return String(value);
-  }
-}
-
-/**
- * Renders explanatory metadata for the currently selected flow step.
- */
-function renderExplainPanel(flow: FlowDefinition | undefined): void {
-  if (!flow || typeof selectedStepIndex !== 'number' || selectedStepIndex < 0) {
-    flowExplain.textContent = 'Select a flow step to inspect confidence and reasoning.';
-    return;
-  }
-
-  const nodeId = flow.nodeIds[selectedStepIndex];
-  const node = nodeCatalog.get(nodeId);
-  const moduleNodeId = node ? getModuleNodeId(node) : undefined;
-  const moduleNode = moduleNodeId ? nodeCatalog.get(moduleNodeId) : undefined;
-  const incomingEdgeId = selectedStepIndex > 0 ? flow.edgeIds[selectedStepIndex - 1] : undefined;
-  const incomingEdge = incomingEdgeId ? edgeCatalog.get(incomingEdgeId) : undefined;
-  const edgeConfidence = incomingEdge ? Math.round(getEdgeConfidence(incomingEdge) * 100) : undefined;
-
-  const lines: string[] = [];
-  lines.push(`Node: ${node?.name ?? nodeId}`);
-
-  if (moduleNode?.name) {
-    lines.push(`Module: ${moduleNode.name}`);
-  }
-
-  if (node?.filePath && typeof node.line === 'number') {
-    lines.push(`Location: ${node.filePath}:${node.line}`);
-  }
-
-  if (!incomingEdge) {
-    lines.push('Incoming edge: flow entry point');
-  } else {
-    lines.push(`Incoming edge: ${incomingEdge.type}`);
-    if (typeof edgeConfidence === 'number') {
-      lines.push(`Confidence: ${edgeConfidence}%`);
-    }
-    if (incomingEdge.metadata?.provenance) {
-      lines.push(`Provenance: ${incomingEdge.metadata.provenance}`);
-    }
-    if (incomingEdge.metadata?.reason) {
-      lines.push(`Reason: ${incomingEdge.metadata.reason}`);
-    }
-  }
-
-  flowExplain.textContent = lines.join('\n');
-}
-
-/**
- * Reads edge confidence with sane fallback and clamping.
- */
-function getEdgeConfidence(edge: GraphEdge): number {
-  const raw = edge.metadata?.confidence;
-  if (typeof raw !== 'number' || Number.isNaN(raw)) {
-    return 1;
-  }
-
-  return clamp(raw, 0, 1);
-}
-
-/**
- * Applies selected layout mode to currently displayed graph data.
- */
-function applyLayout(graphData: GraphData, shouldFit: boolean): void {
-  if (graphData.nodes.length === 0) {
-    return;
-  }
-
-  if (currentLayoutMode === 'clustered') {
-    applyClusteredLayout(graphData, shouldFit);
-    return;
-  }
-
-  const spacingFactor = 0.8 + declutterState.layoutSpacing * 0.25;
-
-  runLayout({
-    name: 'cose',
-    animate: false,
-    nodeRepulsion: Math.round(240000 * Math.pow(spacingFactor, 1.35)),
-    idealEdgeLength: Math.round(100 * spacingFactor),
-    fit: shouldFit,
-    padding: Math.round(40 * spacingFactor)
-  });
-}
-
-/**
- * Applies deterministic clustered layout positions.
- */
-function applyClusteredLayout(graphData: GraphData, shouldFit: boolean): void {
-  const positions = computeClusteredPositions(graphData);
-  const positionMap: Record<string, Point> = {};
-  for (const [id, point] of positions.entries()) {
-    positionMap[id] = point;
-  }
-
-  runLayout({
-    name: 'preset',
-    positions: positionMap,
-    animate: false,
-    fit: shouldFit,
-    padding: 70
-  });
-}
-
-/**
- * Computes clustered positions for modules, functions, classes, and variables.
- */
-function computeClusteredPositions(graphData: GraphData): Map<string, Point> {
-  const positions = new Map<string, Point>();
-  const nodeById = new Map<string, GraphNode>();
-
-  for (const node of graphData.nodes) {
-    nodeById.set(node.id, node);
-  }
-
-  const moduleNodes = graphData.nodes.filter((node) => node.type === 'module');
-  const internalModuleNodes = moduleNodes.filter((node) => !node.metadata?.external);
-  const externalModuleNodes = moduleNodes.filter((node) => node.metadata?.external);
-
-  const dependencyAdjacency = new Map<string, Set<string>>();
-  const indegree = new Map<string, number>();
-
-  for (const module of internalModuleNodes) {
-    dependencyAdjacency.set(module.id, new Set<string>());
-    indegree.set(module.id, 0);
-  }
-
-  for (const edge of graphData.edges) {
-    if (edge.type !== 'dependency') {
-      continue;
-    }
-
-    const sourceNode = nodeById.get(edge.source);
-    const targetNode = nodeById.get(edge.target);
-    if (!sourceNode || !targetNode) {
-      continue;
-    }
-
-    if (sourceNode.type !== 'module' || targetNode.type !== 'module') {
-      continue;
-    }
-
-    if (sourceNode.metadata?.external || targetNode.metadata?.external) {
-      continue;
-    }
-
-    dependencyAdjacency.get(sourceNode.id)?.add(targetNode.id);
-    indegree.set(targetNode.id, (indegree.get(targetNode.id) ?? 0) + 1);
-  }
-
-  const queue = [...internalModuleNodes]
-    .filter((node) => (indegree.get(node.id) ?? 0) === 0)
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const layerByModuleId = new Map<string, number>();
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) {
-      continue;
-    }
-
-    const currentLayer = layerByModuleId.get(current.id) ?? 0;
-
-    for (const neighborId of dependencyAdjacency.get(current.id) ?? []) {
-      layerByModuleId.set(neighborId, Math.max(layerByModuleId.get(neighborId) ?? 0, currentLayer + 1));
-      indegree.set(neighborId, (indegree.get(neighborId) ?? 0) - 1);
-
-      if ((indegree.get(neighborId) ?? 0) === 0) {
-        const neighborNode = nodeById.get(neighborId);
-        if (neighborNode) {
-          queue.push(neighborNode);
-          queue.sort((a, b) => a.name.localeCompare(b.name));
-        }
-      }
-    }
-  }
-
-  for (const module of internalModuleNodes) {
-    if (!layerByModuleId.has(module.id)) {
-      layerByModuleId.set(module.id, 0);
-    }
-  }
-
-  const modulesByLayer = new Map<number, GraphNode[]>();
-  for (const module of internalModuleNodes) {
-    const layer = layerByModuleId.get(module.id) ?? 0;
-    const bucket = modulesByLayer.get(layer) ?? [];
-    bucket.push(module);
-    modulesByLayer.set(layer, bucket);
-  }
-
-  const spacingFactor = 0.8 + declutterState.layoutSpacing * 0.25;
-  const horizontalSpacing = 460 * spacingFactor;
-  const verticalSpacing = 300 * spacingFactor;
-  const layerKeys = [...modulesByLayer.keys()].sort((a, b) => a - b);
-
-  for (const layer of layerKeys) {
-    const modules = (modulesByLayer.get(layer) ?? []).sort((a, b) => a.name.localeCompare(b.name));
-    const baseY = -((modules.length - 1) * verticalSpacing) / 2;
-
-    modules.forEach((moduleNode, index) => {
-      positions.set(moduleNode.id, {
-        x: layer * horizontalSpacing,
-        y: baseY + index * verticalSpacing
-      });
-    });
-  }
-
-  const rightMostLayer = layerKeys.length > 0 ? layerKeys[layerKeys.length - 1] : 0;
-  const externalBaseY = -((externalModuleNodes.length - 1) * verticalSpacing) / 2;
-
-  externalModuleNodes
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .forEach((moduleNode, index) => {
-      positions.set(moduleNode.id, {
-        x: (rightMostLayer + 1) * horizontalSpacing,
-        y: externalBaseY + index * verticalSpacing
-      });
-    });
-
-  const functionsByModuleId = new Map<string, GraphNode[]>();
-  const classesByModuleId = new Map<string, GraphNode[]>();
-  const unscopedFunctions: GraphNode[] = [];
-
-  for (const node of graphData.nodes) {
-    if (node.type === 'class') {
-      const moduleNodeId = getModuleNodeId(node);
-      if (!moduleNodeId) {
-        continue;
-      }
-
-      const scoped = classesByModuleId.get(moduleNodeId) ?? [];
-      scoped.push(node);
-      classesByModuleId.set(moduleNodeId, scoped);
-      continue;
-    }
-
-    if (node.type !== 'function') {
-      continue;
-    }
-
-    const moduleNodeId = getModuleNodeId(node);
-    if (!moduleNodeId) {
-      unscopedFunctions.push(node);
-      continue;
-    }
-
-    const scoped = functionsByModuleId.get(moduleNodeId) ?? [];
-    scoped.push(node);
-    functionsByModuleId.set(moduleNodeId, scoped);
-  }
-
-  for (const [moduleId, classes] of classesByModuleId.entries()) {
-    const center = positions.get(moduleId) ?? { x: 0, y: 0 };
-    const sortedClasses = [...classes].sort((a, b) => a.name.localeCompare(b.name));
-
-    sortedClasses.forEach((classNode, index) => {
-      const items = Math.max(sortedClasses.length, 1);
-      const angle = (2 * Math.PI * index) / items - Math.PI / 2;
-      const radius = 96 * spacingFactor;
-
-      positions.set(classNode.id, {
-        x: center.x + radius * Math.cos(angle),
-        y: center.y + radius * Math.sin(angle)
-      });
-    });
-  }
-
-  for (const [moduleId, functions] of functionsByModuleId.entries()) {
-    const center = positions.get(moduleId) ?? { x: 0, y: 0 };
-    const sortedFunctions = [...functions].sort((a, b) => a.name.localeCompare(b.name));
-
-    sortedFunctions.forEach((functionNode, index) => {
-      const perRing = 10;
-      const ring = Math.floor(index / perRing);
-      const indexInRing = index % perRing;
-      const itemsInRing = Math.min(perRing, sortedFunctions.length - ring * perRing);
-      const angle = (2 * Math.PI * indexInRing) / Math.max(itemsInRing, 1) - Math.PI / 2;
-      const radius = (130 + ring * 72) * spacingFactor;
-
-      positions.set(functionNode.id, {
-        x: center.x + radius * Math.cos(angle),
-        y: center.y + radius * Math.sin(angle)
-      });
-    });
-  }
-
-  const orphanSpacing = 95 * spacingFactor;
-  const orphanBaseY = -((unscopedFunctions.length - 1) * orphanSpacing) / 2;
-  unscopedFunctions
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .forEach((functionNode, index) => {
-      positions.set(functionNode.id, {
-        x: -horizontalSpacing,
-        y: orphanBaseY + index * orphanSpacing
-      });
-    });
-
-  const variableNodes = graphData.nodes
-    .filter((node) => node.type === 'variable')
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const variableAnchorCounts = new Map<string, number>();
-
-  for (const variableNode of variableNodes) {
-    const functionNodeId = getFunctionNodeId(variableNode);
-    const moduleNodeId = getModuleNodeId(variableNode);
-    const anchorId = functionNodeId ?? moduleNodeId;
-    if (!anchorId) {
-      continue;
-    }
-
-    const anchor = positions.get(anchorId);
-    if (!anchor) {
-      continue;
-    }
-
-    const index = variableAnchorCounts.get(anchorId) ?? 0;
-    variableAnchorCounts.set(anchorId, index + 1);
-
-    const perRing = 8;
-    const ring = Math.floor(index / perRing);
-    const indexInRing = index % perRing;
-    const angle = (2 * Math.PI * indexInRing) / perRing - Math.PI / 2;
-    const radius = (44 + ring * 24) * spacingFactor;
-
-    positions.set(variableNode.id, {
-      x: anchor.x + radius * Math.cos(angle),
-      y: anchor.y + radius * Math.sin(angle)
-    });
-  }
-
-  return positions;
-}
-
-/**
- * Builds node label text, including reduction counters where relevant.
- */
-function formatNodeLabel(node: GraphNode): string {
-  if (node.id === COLLAPSED_LIBRARIES_NODE_ID) {
-    const count = typeof node.metadata?.collapsedLibrariesCount === 'number'
-      ? node.metadata.collapsedLibrariesCount
-      : 0;
-    return count > 0 ? `Libraries (+${count})` : node.name;
-  }
-
-  if (node.type === 'module') {
-    const collapsedCount =
-      typeof node.metadata?.collapsedFunctions === 'number' ? node.metadata.collapsedFunctions : 0;
-    if (collapsedCount > 0) {
-      return `${node.name} (+${collapsedCount})`;
-    }
-  }
-
-  return node.name;
-}
-
-/**
- * Returns a node's module id from metadata.
- */
-function getModuleNodeId(node: GraphNode): string | undefined {
-  const rawValue = node.metadata?.moduleNodeId;
-  return typeof rawValue === 'string' ? rawValue : undefined;
-}
-
-/**
- * Returns a node's function id from metadata.
- */
-function getFunctionNodeId(node: GraphNode): string | undefined {
-  const rawValue = node.metadata?.functionNodeId;
-  return typeof rawValue === 'string' ? rawValue : undefined;
-}
-
-/**
- * Resolves module id for a node, including module nodes themselves.
- */
-function thisNodeModuleId(node: GraphNode | undefined): string | undefined {
-  if (!node) {
-    return undefined;
-  }
-
-  if (node.type === 'module') {
-    return node.id;
-  }
-
-  return getModuleNodeId(node);
-}
-
-/**
- * Adjusts zoom by a multiplicative factor centered on viewport midpoint.
- */
-function zoomByFactor(factor: number): void {
-  const nextZoom = clamp(graph.zoom() * factor, MIN_ZOOM, MAX_ZOOM);
-  graph.zoom({
-    level: nextZoom,
-    renderedPosition: { x: graph.width() / 2, y: graph.height() / 2 }
-  });
-  updateZoomResetLabel();
-}
-
-/**
- * Clamps numeric values to an inclusive range.
- */
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-/**
- * Updates zoom reset button label from current zoom level.
- */
-function updateZoomResetLabel(): void {
-  zoomResetButton.textContent = `${Math.round(graph.zoom() * 100)}%`;
-}
-
-/**
- * Runs a Cytoscape layout and refreshes viewport-dependent UI after completion.
- */
-function runLayout(options: cytoscape.LayoutOptions): void {
-  const layout = graph.layout(options);
-  graph.one('layoutstop', () => {
-    scheduleMinimapRender();
-    updateZoomResetLabel();
-  });
-  layout.run();
-}
-
-/**
- * Pans graph viewport so the provided model point is centered.
- */
-function centerGraphAtModelPoint(modelX: number, modelY: number): void {
-  const zoom = graph.zoom();
-  graph.pan({
-    x: graph.width() / 2 - modelX * zoom,
-    y: graph.height() / 2 - modelY * zoom
-  });
-  scheduleMinimapRender();
-}
-
-/**
- * Schedules a minimap redraw on the next animation frame.
- */
-function scheduleMinimapRender(): void {
-  if (minimapUpdateRequested) {
-    return;
-  }
-
-  minimapUpdateRequested = true;
-  requestAnimationFrame(() => {
-    minimapUpdateRequested = false;
-    renderMinimap();
-  });
-}
-
-/**
- * Renders minimap content and viewport rectangle.
- */
-function renderMinimap(): void {
-  const cssWidth = minimapCanvas.clientWidth;
-  const cssHeight = minimapCanvas.clientHeight;
-  const dpr = window.devicePixelRatio || 1;
-  const pixelWidth = Math.max(1, Math.floor(cssWidth * dpr));
-  const pixelHeight = Math.max(1, Math.floor(cssHeight * dpr));
-
-  if (minimapCanvas.width !== pixelWidth || minimapCanvas.height !== pixelHeight) {
-    minimapCanvas.width = pixelWidth;
-    minimapCanvas.height = pixelHeight;
-  }
-
-  minimapContext.setTransform(dpr, 0, 0, dpr, 0, 0);
-  minimapContext.clearRect(0, 0, cssWidth, cssHeight);
-
-  const bounds = graph.elements().boundingBox();
-  if (!Number.isFinite(bounds.w) || !Number.isFinite(bounds.h) || graph.nodes().length === 0) {
-    minimapTransform = undefined;
-    return;
-  }
-
-  const modelPadding = 30;
-  const x1 = bounds.x1 - modelPadding;
-  const y1 = bounds.y1 - modelPadding;
-  const modelWidth = Math.max(bounds.w + modelPadding * 2, 1);
-  const modelHeight = Math.max(bounds.h + modelPadding * 2, 1);
-  const innerPadding = 6;
-  const scale = Math.min(
-    (cssWidth - innerPadding * 2) / modelWidth,
-    (cssHeight - innerPadding * 2) / modelHeight
-  );
-  const offsetX = (cssWidth - modelWidth * scale) / 2 - x1 * scale;
-  const offsetY = (cssHeight - modelHeight * scale) / 2 - y1 * scale;
-
-  minimapTransform = { scale, offsetX, offsetY };
-
-  drawMinimapNodes(scale, offsetX, offsetY);
-  drawMinimapViewport(scale, offsetX, offsetY);
-}
-
-/**
- * Draws node points into the minimap.
- */
-function drawMinimapNodes(scale: number, offsetX: number, offsetY: number): void {
-  for (const node of graph.nodes()) {
-    const position = node.position();
-    const x = position.x * scale + offsetX;
-    const y = position.y * scale + offsetY;
-    const type = String(node.data('type'));
-    const isExternal = Number(node.data('external')) === 1;
-
-    const color = isExternal
-      ? '#6c757d'
-      : type === 'module'
-        ? '#1b4332'
-        : '#4f772d';
-    const radius = type === 'module' ? 2.4 : 1.8;
-
-    minimapContext.beginPath();
-    minimapContext.fillStyle = color;
-    minimapContext.arc(x, y, radius, 0, Math.PI * 2);
-    minimapContext.fill();
-  }
-}
-
-/**
- * Draws current viewport bounds into the minimap overlay.
- */
-function drawMinimapViewport(scale: number, offsetX: number, offsetY: number): void {
-  const viewport = getVisibleModelBounds();
-  const x = viewport.x1 * scale + offsetX;
-  const y = viewport.y1 * scale + offsetY;
-  const width = Math.max((viewport.x2 - viewport.x1) * scale, 1);
-  const height = Math.max((viewport.y2 - viewport.y1) * scale, 1);
-
-  minimapContext.fillStyle = 'rgba(111, 255, 233, 0.11)';
-  minimapContext.strokeStyle = 'rgba(111, 255, 233, 0.75)';
-  minimapContext.lineWidth = 1;
-  minimapContext.fillRect(x, y, width, height);
-  minimapContext.strokeRect(x, y, width, height);
-}
-
-/**
- * Returns current visible model-space bounds.
- */
-function getVisibleModelBounds(): { x1: number; y1: number; x2: number; y2: number } {
-  const pan = graph.pan();
-  const zoom = graph.zoom();
-
-  return {
-    x1: -pan.x / zoom,
-    y1: -pan.y / zoom,
-    x2: (graph.width() - pan.x) / zoom,
-    y2: (graph.height() - pan.y) / zoom
-  };
-}
-
-/**
- * Resolves a required DOM element and throws if missing.
- */
-function getRequiredElement<T extends Element>(selector: string): T {
-  const element = document.querySelector<T>(selector);
-  if (!element) {
-    throw new Error(`FlowDE webview failed to resolve required element: ${selector}`);
+    throw new Error(`Missing required element: ${selector}`);
   }
 
   return element;
-}
-
-/**
- * Returns required 2D canvas context for minimap rendering.
- */
-function getRequiredCanvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
-  const context = canvas.getContext('2d');
-  if (!context) {
-    throw new Error('FlowDE webview failed to initialize minimap canvas context.');
-  }
-
-  return context;
 }
