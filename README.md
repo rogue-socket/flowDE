@@ -1,148 +1,183 @@
 # FlowDE
 
-FlowDE is a VS Code extension that adds a graph-native cognition layer for Python codebases.
+FlowDE is a VS Code extension for visualizing Python code as a simple flowchart-oriented graph.
 
-It now visualizes:
+The current implementation is intentionally focused on one core workflow:
 
-- Functions as nodes
-- Classes as nodes
-- Variables as nodes
-- Modules as nodes
-- Structural, dependency, and data-flow relations as distinct edge layers
+1. Build a static graph from Python files in the active workspace
+2. Discover top-to-bottom directed flows
+3. Let the user inspect each flow step-by-step
+4. Jump from graph node to source code location
 
-And it keeps the text-first workflow intact by letting you click a node and jump directly to the exact source line.
+## Current Status
 
-## Phase 2 Capabilities
+- Scope is intentionally reduced to a minimal flowchart editor/viewer experience
+- TypeScript strict checks are enabled and pass via `npm run check`
+- Bundling is done with esbuild and passes via `npm run build`
+- Runtime tracing and graph-to-code mutation features were removed from host and webview
 
-- Command: `FlowDE: Open Graph View`
-- Dedicated graph panel in VS Code webview
-- Python workspace parsing (`*.py` files)
-- Graph rendering with zoom and pan
-- Layer controls for Structural, Dependency, Data Flow, and Execution (future-ready)
-- Node click navigation to code (file + line)
-- Live refresh support (manual and on Python file changes)
-- Smart reduction + expand-on-demand for dense graphs
-- Runtime trace instrumentation with live graph highlighting
-- Step-through execution replay controls
-- Node runtime state inspection (inputs, outputs, intermediate locals)
-- Graph-native editing controls (create/connect/rename/move)
-- Bi-directional graph-code sync via direct code edits + file watcher refresh
-- Entry-point call path exploration with branching-aware path enumeration
-- Data-flow tracing across variables/functions with forward/backward traversal
+## What You Can Do
 
-## Architecture
+- Run command: `FlowDE: Open Graph View`
+- See a graph of modules, classes, and functions from workspace Python files
+- Auto-refresh graph when `*.py` files are created, edited, or deleted
+- Refresh manually from the toolbar
+- Toggle layout:
+	- Top to Bottom (breadth-first directed)
+	- Force Directed (CoSE)
+- Fit graph viewport
+- Set flow extraction max depth
+- Filter flows by module
+- Pick a discovered flow and inspect ordered steps
+- Select a node and see inspector details:
+	- name
+	- type
+	- incoming edge count
+	- outgoing edge count
+	- source location (if available)
+- Open source for the selected node
 
-### 1. Extension Backend
+## What Is Not Included (By Design)
 
-Location: `src/extension.ts`
+- Runtime execution tracing and replay
+- Execution overlays and timeline controls
+- Graph-to-code mutation actions (create/connect/rename/move)
+- Advanced explorer panels (journey mode, call-path explorer, data-flow explorer)
+- Layer toggles, abstraction toggles, reduction toggles, minimap, and playback controls
+
+## Product Model
+
+FlowDE is a two-part system:
+
+- Extension host (Node, VS Code API)
+- Webview UI (browser runtime with Cytoscape)
+
+The host builds graph data from Python sources and sends it to the webview. The webview computes candidate top-to-bottom paths and renders interactions.
+
+## Core Architecture
+
+### Extension Host
+
+File: `src/extension.ts`
 
 Responsibilities:
 
-- Registers the command
-- Creates and manages webview panel
-- Builds workspace graph via parser service
-- Handles navigation events from webview
-- Watches Python file changes and refreshes graph
+- Register command `flowde.openGraphView`
+- Create and manage one webview panel
+- Watch Python files in workspace and schedule debounced refresh
+- Build graph via `PythonWorkspaceGraphBuilder`
+- Cache node lookup by id for navigation
+- Open selected node source location in editor
 
-### 2. Semantic Graph Engine
+Incoming webview message types:
 
-Locations:
+- `ready`
+- `refreshGraph`
+- `navigateToNode`
 
+Outgoing host message types:
+
+- `graphData`
+- `graphError`
+
+### Graph Pipeline
+
+Files:
+
+- `src/graph/schema.ts`
+- `src/graph/semanticTypes.ts`
+- `src/graph/workspaceGraphBuilder.ts`
 - `src/graph/pythonWorkspaceIndexer.ts`
 - `src/graph/pythonRelationResolver.ts`
-- `src/graph/workspaceGraphBuilder.ts`
 - `src/graph/workspaceGraphCache.ts`
 
-Pipeline:
+Pipeline stages:
 
-1. Indexer: parses Python files into module/class/function/variable/import/call/data-flow artifacts
-2. Resolver: resolves cross-file relations with confidence + provenance
-3. Builder: assembles layered graph nodes/edges and meta diagnostics
+1. Index workspace Python files with lezer parser
+2. Collect symbols and references:
+	 - modules
+	 - classes
+	 - functions
+	 - variables
+	 - call references
+	 - data-flow references
+	 - imports and alias bindings
+3. Resolve references into graph edges:
+	 - containment edges
+	 - call edges
+	 - module dependency edges
+	 - class usage edges
+	 - data-flow edges
+4. Compute graph diagnostics and layer stats
 
-Graph layers:
+Graph cache strategy:
 
-- Structural layer: containment and declaration topology
-- Dependency layer: calls, imports, class usage
-- Data flow layer: variable movement and transformation paths
-- Execution layer: runtime trace events, traversal replay, and dynamic execution paths
+- Cache key: `mtime:size`
+- Cache stores per-file indexed module output
+- Cache is swept for deleted files
 
-Graph schema: `src/graph/schema.ts`
+### Webview
 
-Core model guarantees:
+Files:
 
-- Nodes can have multiple roles (`container`, `callable`, `type`, `state`, `transform`, `external`)
-- Every edge has an explicit layer and type
-- Graph metadata reports per-layer stats and resolution diagnostics
-
-Execution mapping strategy:
-
-- Python runtime tracer emits structured events (call/line/return/exception)
-- Extension maps runtime events to static graph nodes by workspace-relative file + symbol + line heuristics
-- Webview stores traces for replay and overlays execution traversal on the graph in time order
-
-Graph editing and control strategy:
-
-- Create Function via graph panel: selects module, inputs/outputs, and writes a generated Python stub
-- Connect Nodes via graph panel: inserts a function call into the selected source function body
-- Rename Node: applies identifier rename across Python files with conflict checks
-- Move Function: extracts a top-level function block and appends it to a target module
-- Conflict handling: stale mapping, duplicate definitions, invalid identifiers, and unsupported method moves are rejected with explicit error messages
-
-Call path and data flow strategy:
-
-- Call Path Explorer: pick an entry function and enumerate possible transitive call paths with configurable max depth
-- Branching visibility: path exploration captures multiple branch outcomes and reports touched branch points
-- Data Flow Explorer: pick a source node and trace forward/backward transformation propagation over dataflow (+ call-assisted) edges
-- Impact overlays: traced paths and transformations are rendered directly in the graph with live counts in the sidebar
-
-### 3. Webview Frontend
-
-Location: `src/webview/main.ts` + `media/styles.css`
+- `src/webview/main.ts`
+- `media/styles.css`
 
 Responsibilities:
 
-- Renders interactive graph with Cytoscape
-- Supports click, pan, zoom
-- Sends navigation and refresh messages to backend
-- Displays graph stats and parse warning count
+- Render graph with Cytoscape
+- Filter out variable nodes for visual clarity
+- Prefer call/dependency edges for flow view (fallback to other edges)
+- Discover directed flows with DFS from root candidates
+- Enforce max flow depth and max flow count
+- Render flow list and step list
+- Highlight selected flow and selected node
+- Show inspector metadata and enable source navigation
 
-### 4. Messaging Layer
+Flow extraction behavior:
 
-Bi-directional message types:
+- Root candidates are nodes with zero in-degree and non-zero out-degree
+- If no roots exist, any node with outgoing edges is used as fallback start
+- DFS avoids cycles by per-path visited set
+- Paths shorter than 2 nodes are discarded
+- Result set is deduplicated by node-id sequence key
+- Result count capped at 250 flows
 
-- Webview -> Extension:
-	- `ready`
-	- `refreshGraph`
-	- `navigateToNode`
-- Extension -> Webview:
-	- `graphData`
-	- `graphError`
+## File Structure
 
-## Project Structure
-
-```text
-.
-├── .vscode/
-│   ├── launch.json
-│   └── tasks.json
-├── media/
-│   └── styles.css
-├── src/
-│   ├── graph/
-│   │   ├── pythonRelationResolver.ts
-│   │   ├── pythonWorkspaceIndexer.ts
-│   │   ├── schema.ts
-│   │   ├── semanticTypes.ts
-│   │   ├── workspaceGraphBuilder.ts
-│   │   └── workspaceGraphCache.ts
-│   ├── webview/
-│   │   └── main.ts
-│   └── extension.ts
-├── .gitignore
-├── esbuild.mjs
-├── package.json
-└── tsconfig.json
 ```
+.
+|-- .vscode/
+|   |-- launch.json
+|   `-- tasks.json
+|-- CHANGELOG.md
+|-- LICENSE
+|-- README.md
+|-- esbuild.mjs
+|-- media/
+|   |-- icon.png
+|   |-- styles.css
+|   |-- webview.js
+|   `-- webview.js.map
+|-- package.json
+|-- src/
+|   |-- extension.ts
+|   |-- graph/
+|   |   |-- pythonRelationResolver.ts
+|   |   |-- pythonWorkspaceIndexer.ts
+|   |   |-- schema.ts
+|   |   |-- semanticTypes.ts
+|   |   |-- workspaceGraphBuilder.ts
+|   |   `-- workspaceGraphCache.ts
+|   `-- webview/
+|       `-- main.ts
+`-- tsconfig.json
+```
+
+Notes:
+
+- `media/webview.js` and `.map` are build outputs generated from `src/webview/main.ts`
+- `dist/extension.js` is generated from `src/extension.ts`
 
 ## Setup
 
@@ -150,79 +185,90 @@ Bi-directional message types:
 
 - Node.js 20+
 - npm 10+
-- VS Code
+- VS Code 1.95+
 
-### Install
+### Install dependencies
 
 ```bash
 npm install
 ```
 
-### Build
+### Build extension + webview bundles
 
 ```bash
 npm run build
 ```
 
-### Package for Marketplace
+### Watch mode
 
 ```bash
-npm run package
+npm run watch
 ```
 
-This generates a `.vsix` bundle in the project root.
-
-### Publish to Marketplace
-
-1. Create a Personal Access Token (PAT) for the Visual Studio Marketplace.
-2. Log in once from your machine:
+### Type check
 
 ```bash
-npx vsce login flowde
+npm run check
 ```
 
-3. Publish the current version:
+### Run in Extension Development Host
 
-```bash
-npm run publish
-```
+1. Open this repository in VS Code
+2. Press `F5` and choose `Run FlowDE Extension`
+3. In the new Extension Development Host, open a Python workspace
+4. Execute command `FlowDE: Open Graph View`
 
-Versioning tip: bump `version` in `package.json` before each publish.
+## Build and Packaging
 
-### Run Extension
+Available scripts from `package.json`:
 
-1. Open this repository in VS Code.
-2. Press `F5` (launch config: `Run FlowDE Extension`).
-3. In the Extension Development Host window, open any Python project folder.
-4. Run command: `FlowDE: Open Graph View`.
+- `build`: esbuild extension and webview
+- `watch`: esbuild watch for both targets
+- `check`: TypeScript no-emit compile
+- `package`: package VSIX using vsce
+- `publish`: publish using vsce
 
-## Validation Checklist
+## Dependencies
 
-Functional checks:
+Runtime:
 
-- Graph panel opens without crashing
-- Functions appear as nodes
-- Clicking a function node opens the correct file and line
+- `@lezer/common`
+- `@lezer/python`
+- `cytoscape`
 
-Edge-case checks:
+Development:
 
-- Empty project
-- Single Python file
-- Files with no functions
-- Files with syntax errors (graph should partially render)
+- `typescript`
+- `esbuild`
+- `@types/node`
+- `@types/vscode`
+- `@vscode/vsce`
 
-Performance check:
+## Simplification Notes (What Changed)
 
-- Test with 20-50 Python files
-- Verify graph loads in a reasonable time on refresh
+The current codebase reflects a simplification pass to keep FlowDE focused and maintainable.
 
-## Notes on Semantic Reliability
+Removed from implementation:
 
-Python is dynamic, so the semantic engine prioritizes traceable confidence over false certainty.
+- runtime trace orchestration in extension host
+- Python tracer runtime module
+- graph edit operations from webview and host message channel
+- advanced analysis and navigation control panels
 
-- Every call edge includes provenance (`import-map`, `ast`, `heuristic`) and confidence
-- Resolver reports unresolved vs ambiguous calls in graph diagnostics
-- Indexer uses incremental cache (file mtime + size) for faster refreshes
-- Parser failures degrade gracefully into partial module graphs with warnings
+Retained:
 
-This keeps graph evolution measurable while enabling future LSP/runtime trace enrichment.
+- graph indexing/resolution engine
+- focused graph rendering and flow exploration
+- node-to-source navigation
+
+## Known Constraints
+
+- Call resolution is heuristic and may leave ambiguous calls unresolved
+- Flow extraction is static and based on directed graph topology, not runtime behavior
+- Very large Python workspaces may produce dense graphs despite UI simplification
+- Variable symbols are still indexed for graph semantics, but hidden from the main graph UI for readability
+
+## Documentation
+
+- Product requirements and implementation specification: `docs/PRD.md`
+
