@@ -11,6 +11,11 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - Updated packaging and release documentation.
 - Refined git and VSIX ignore patterns for generated artifacts.
 
+## [0.1.1] - 2026-04-17
+
+### Changed
+- Republished FlowDE with the rogue-socket publisher and refreshed packaging toolchain.
+
 ## [0.1.0] - 2026-04-07
 
 ### Added
