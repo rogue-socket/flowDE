@@ -1,6 +1,6 @@
 # FlowDE
 
-FlowDE is a VS Code extension for visualizing Python code as a simple flowchart-oriented graph.
+FlowDE is a VS Code extension for visualizing Python code as a focused flowchart-oriented graph explorer.
 
 The current implementation is intentionally focused on one core workflow:
 
@@ -11,7 +11,7 @@ The current implementation is intentionally focused on one core workflow:
 
 ## Current Status
 
-- Scope is intentionally reduced to a minimal flowchart editor/viewer experience
+- Scope is intentionally reduced to a minimal flowchart graph viewing experience
 - TypeScript strict checks are enabled and pass via `npm run check`
 - Bundling is done with esbuild and passes via `npm run build`
 - Runtime tracing and graph-to-code mutation features were removed from host and webview
@@ -225,8 +225,27 @@ Available scripts from `package.json`:
 - `build`: esbuild extension and webview
 - `watch`: esbuild watch for both targets
 - `check`: TypeScript no-emit compile
+- `vscode:prepublish`: runs `check` and `build` before packaging/publish
 - `package`: package VSIX using vsce
 - `publish`: publish using vsce
+
+Recommended release flow:
+
+1. `npm run check`
+2. `npm run build`
+3. `npm run package`
+4. Validate the generated `.vsix` locally in VS Code
+5. `npm run publish`
+
+Notes:
+
+- Build outputs in `dist/` and `media/webview.js` are generated artifacts and are gitignored
+- VSIX files are generated artifacts and are gitignored
+
+## Marketplace Publisher
+
+- VS Code Marketplace publisher id: `rogue-socket`
+- Ensure your publishing token has access to this publisher before running `npm run publish`
 
 ## Dependencies
 
