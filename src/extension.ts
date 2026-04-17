@@ -8,7 +8,8 @@ import { GraphData, GraphNode } from './graph/schema';
 type IncomingWebviewMessage =
   | { type: 'ready' }
   | { type: 'refreshGraph' }
-  | { type: 'navigateToNode'; nodeId: string };
+  | { type: 'navigateToNode'; nodeId: string }
+  | { type: 'navigateToEdge'; edgeId: string; filePath: string; line: number };
 
 /**
  * Extension activation entrypoint.
@@ -135,6 +136,10 @@ class FlowDEPanel implements vscode.Disposable {
         void this.navigateToNode(message.nodeId);
         break;
       }
+      case 'navigateToEdge': {
+        void this.navigateToLocation(message.filePath, message.line);
+        break;
+      }
       default:
         break;
     }
@@ -195,7 +200,14 @@ class FlowDEPanel implements vscode.Disposable {
       return;
     }
 
-    const targetUri = vscode.Uri.joinPath(this.workspaceFolder.uri, node.filePath);
+    await this.navigateToLocation(node.filePath, node.line);
+  }
+
+  /**
+   * Opens and reveals a specific file and line in the editor.
+   */
+  private async navigateToLocation(filePath: string, line: number): Promise<void> {
+    const targetUri = vscode.Uri.joinPath(this.workspaceFolder.uri, filePath);
     const document = await vscode.workspace.openTextDocument(targetUri);
     const editor = await vscode.window.showTextDocument(document, {
       preview: false,
@@ -203,7 +215,7 @@ class FlowDEPanel implements vscode.Disposable {
       viewColumn: vscode.ViewColumn.One
     });
 
-    const lineNumber = Math.max(node.line - 1, 0);
+    const lineNumber = Math.max(line - 1, 0);
     const position = new vscode.Position(lineNumber, 0);
     editor.selection = new vscode.Selection(position, position);
     editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
@@ -244,7 +256,7 @@ class FlowDEPanel implements vscode.Disposable {
       <header class="toolbar">
         <div class="title-group">
           <h1>FlowDE</h1>
-          <p>Simple flowchart editor</p>
+          <p>Click a node to focus • Click again to unfocus</p>
         </div>
         <div class="toolbar-actions">
           <button id="layout-btn" type="button">Layout: Top to Bottom</button>

@@ -27,29 +27,6 @@ export interface IndexedClassSymbol {
 }
 
 /**
- * Symbol discovered from a variable binding in module or function scope.
- */
-export interface IndexedVariableSymbol {
-  id: string;
-  name: string;
-  filePath: string;
-  line: number;
-  moduleNodeId: string;
-  moduleName: string;
-  functionNodeId?: string;
-}
-
-/**
- * Indexed data-flow relationship derived from assignment, parameters, or returns.
- */
-export interface IndexedDataFlowReference {
-  sourceNodeId: string;
-  targetNodeId: string;
-  variableName?: string;
-  reason: string;
-}
-
-/**
  * Indexed call-site relationship discovered in function bodies.
  */
 export interface IndexedCallReference {
@@ -58,6 +35,7 @@ export interface IndexedCallReference {
   sourceModuleName: string;
   calleeName: string;
   calleePath: string[];
+  line?: number;
 }
 
 /**
@@ -79,9 +57,7 @@ export interface IndexedModule {
   moduleNode: GraphNode;
   classes: IndexedClassSymbol[];
   functions: IndexedFunctionSymbol[];
-  variables: IndexedVariableSymbol[];
   callRefs: IndexedCallReference[];
-  dataFlowRefs: IndexedDataFlowReference[];
   dependencies: string[];
   importBindings: ImportBinding[];
   warning?: string;
@@ -108,9 +84,7 @@ export interface ResolutionDiagnostics {
   unresolvedCalls: number;
   ambiguousCalls: number;
   classUsageEdges: number;
-  dataFlowEdges: number;
   indexedClasses: number;
-  indexedVariables: number;
 }
 
 /**

@@ -34,9 +34,7 @@ export class PythonWorkspaceGraphBuilder {
           unresolvedCalls: resolution.diagnostics.unresolvedCalls,
           ambiguousCalls: resolution.diagnostics.ambiguousCalls,
           classUsageEdges: resolution.diagnostics.classUsageEdges,
-          dataFlowEdges: resolution.diagnostics.dataFlowEdges,
           indexedClasses: resolution.diagnostics.indexedClasses,
-          indexedVariables: resolution.diagnostics.indexedVariables,
           parserCacheHits: indexing.stats.cacheHits,
           parserCacheMisses: indexing.stats.cacheMisses
         },
@@ -54,9 +52,7 @@ export class PythonWorkspaceGraphBuilder {
   ): Record<GraphLayer, GraphData['meta']['layerStats'][GraphLayer]> {
     const result: Record<GraphLayer, GraphData['meta']['layerStats'][GraphLayer]> = {
       structural: { nodes: 0, edges: 0, visibleByDefault: true },
-      dependency: { nodes: 0, edges: 0, visibleByDefault: true },
-      dataflow: { nodes: 0, edges: 0, visibleByDefault: true },
-      execution: { nodes: 0, edges: 0, visibleByDefault: false }
+      dependency: { nodes: 0, edges: 0, visibleByDefault: true }
     };
 
     for (const node of nodes) {

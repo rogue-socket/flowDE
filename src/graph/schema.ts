@@ -1,22 +1,18 @@
 /**
  * Shared graph contracts exchanged between extension host and webview.
  */
-export type GraphLayer = 'structural' | 'dependency' | 'dataflow' | 'execution';
-export type GraphNodeType = 'function' | 'variable' | 'module' | 'class';
+export type GraphLayer = 'structural' | 'dependency';
+export type GraphNodeType = 'function' | 'module' | 'class';
 export type GraphNodeRole =
   | 'container'
   | 'callable'
   | 'type'
-  | 'state'
-  | 'transform'
   | 'external';
 export type GraphEdgeType =
   | 'call'
   | 'dependency'
   | 'contains'
-  | 'class-usage'
-  | 'dataflow'
-  | 'execution-path';
+  | 'class-usage';
 export type GraphEdgeProvenance = 'containment' | 'ast' | 'import-map' | 'heuristic';
 
 /**
@@ -47,9 +43,7 @@ export interface GraphDiagnostics {
   unresolvedCalls: number;
   ambiguousCalls: number;
   classUsageEdges: number;
-  dataFlowEdges: number;
   indexedClasses: number;
-  indexedVariables: number;
   parserCacheHits: number;
   parserCacheMisses: number;
 }
