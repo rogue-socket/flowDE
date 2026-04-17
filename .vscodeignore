@@ -2,8 +2,10 @@
 **/.vscode/**
 **/.vscode-test/**
 src/**
+docs/**
 tsconfig.json
 esbuild.mjs
 node_modules/**
 .gitignore
+*.vsix
 **/*.map
