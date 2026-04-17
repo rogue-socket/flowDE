@@ -4,7 +4,7 @@
   "description": "Graph-based code comprehension layer for Python projects in VS Code.",
   "icon": "media/icon.png",
   "version": "0.1.0",
-  "publisher": "flowde",
+  "publisher": "rogue-socket",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -14,9 +14,16 @@
     "url": "https://github.com/rogue-socket/flowDE/issues"
   },
   "homepage": "https://github.com/rogue-socket/flowDE#readme",
+  "markdown": "github",
   "engines": {
     "vscode": "^1.95.0"
   },
+  "activationEvents": [
+    "onCommand:flowde.openGraphView"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
   "categories": [
     "Visualization",
     "Other"
@@ -43,7 +50,7 @@
     "watch": "node esbuild.mjs --watch",
     "check": "tsc --noEmit",
     "lint": "echo \"No lint configured yet\"",
-    "vscode:prepublish": "npm run build",
+    "vscode:prepublish": "npm run check && npm run build",
     "package": "vsce package",
     "publish": "vsce publish"
   },
@@ -55,7 +62,7 @@
   "devDependencies": {
     "@types/node": "^22.13.10",
     "@types/vscode": "^1.95.0",
-    "@vscode/vsce": "^3.7.1",
+    "@vscode/vsce": "^3.9.0",
     "esbuild": "^0.25.1",
     "typescript": "^5.8.2"
   }
