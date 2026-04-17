@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project adheres to Semantic Versioning.
 
+## [Unreleased]
+
+### Changed
+- Hardened VS Code Marketplace metadata and prepublish validation.
+- Updated packaging and release documentation.
+- Refined git and VSIX ignore patterns for generated artifacts.
+
 ## [0.1.0] - 2026-04-07
 
 ### Added
