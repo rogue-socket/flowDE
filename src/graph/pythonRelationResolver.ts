@@ -5,7 +5,6 @@ import {
   IndexedClassSymbol,
   IndexedFunctionSymbol,
   IndexedModule,
-  IndexedVariableSymbol,
   ResolutionResult
 } from './semanticTypes';
 
@@ -45,14 +44,7 @@ export class PythonRelationResolver {
 
     const classSymbols: IndexedClassSymbol[] = [];
     const functionSymbols: IndexedFunctionSymbol[] = [];
-    const variableSymbols: IndexedVariableSymbol[] = [];
     const callRefs: IndexedCallReference[] = [];
-    const dataFlowRefs: Array<{
-      sourceNodeId: string;
-      targetNodeId: string;
-      variableName?: string;
-      reason: string;
-    }> = [];
 
     for (const module of modules) {
       nodes.push(module.moduleNode);
@@ -66,9 +58,7 @@ export class PythonRelationResolver {
 
       classSymbols.push(...module.classes);
       functionSymbols.push(...module.functions);
-      variableSymbols.push(...module.variables);
       callRefs.push(...module.callRefs);
-      dataFlowRefs.push(...module.dataFlowRefs);
     }
 
     nodes.push(
@@ -87,38 +77,19 @@ export class PythonRelationResolver {
       }))
     );
 
-    const nodeIds = new Set(nodes.map((node) => node.id));
-
     nodes.push(
       ...functionSymbols.map((symbol) => ({
         id: symbol.id,
         type: 'function' as const,
         name: symbol.name,
-        layers: ['structural', 'dependency', 'dataflow'] as GraphNode['layers'],
-        roles: ['callable', 'transform'] as GraphNode['roles'],
+        layers: ['structural', 'dependency'] as GraphNode['layers'],
+        roles: ['callable'] as GraphNode['roles'],
         filePath: symbol.filePath,
         line: symbol.line,
         moduleName: symbol.moduleName,
         metadata: {
           moduleNodeId: symbol.moduleNodeId,
           classNodeId: symbol.classNodeId
-        }
-      }))
-    );
-
-    nodes.push(
-      ...variableSymbols.map((symbol) => ({
-        id: symbol.id,
-        type: 'variable' as const,
-        name: symbol.name,
-        layers: ['structural', 'dataflow'] as GraphNode['layers'],
-        roles: ['state'] as GraphNode['roles'],
-        filePath: symbol.filePath,
-        line: symbol.line,
-        moduleName: symbol.moduleName,
-        metadata: {
-          moduleNodeId: symbol.moduleNodeId,
-          functionNodeId: symbol.functionNodeId
         }
       }))
     );
@@ -177,29 +148,10 @@ export class PythonRelationResolver {
       });
     }
 
-    for (const symbol of variableSymbols) {
-      const parentNodeId = symbol.functionNodeId ?? symbol.moduleNodeId;
-      this.addEdge(edges, uniqueEdgeIds, {
-        id: `edge:contains:${parentNodeId}->${symbol.id}`,
-        source: parentNodeId,
-        target: symbol.id,
-        type: 'contains',
-        layer: 'structural',
-        metadata: {
-          confidence: 1,
-          provenance: 'containment',
-          reason: symbol.functionNodeId
-            ? 'Variable is tracked inside function scope.'
-            : 'Variable is tracked at module scope.'
-        }
-      });
-    }
-
     let resolvedCalls = 0;
     let unresolvedCalls = 0;
     let ambiguousCalls = 0;
     let classUsageEdges = 0;
-    let dataFlowEdges = 0;
 
     for (const callRef of callRefs) {
       const resolution = this.resolveCallTarget(
@@ -221,7 +173,8 @@ export class PythonRelationResolver {
           metadata: {
             confidence: resolution.confidence,
             provenance: resolution.provenance,
-            reason: resolution.reason
+            reason: resolution.reason,
+            line: callRef.line
           }
         });
       } else {
@@ -243,32 +196,11 @@ export class PythonRelationResolver {
           metadata: {
             confidence: 0.65,
             provenance: 'heuristic',
-            reason: `Call expression references class-like symbol ${classUsageTarget.name}.`
+            reason: `Call expression references class-like symbol ${classUsageTarget.name}.`,
+            line: callRef.line
           }
         });
       }
-    }
-
-    for (const ref of dataFlowRefs) {
-      if (!nodeIds.has(ref.sourceNodeId) || !nodeIds.has(ref.targetNodeId)) {
-        continue;
-      }
-
-      const edgeId = `edge:dataflow:${ref.sourceNodeId}->${ref.targetNodeId}:${ref.reason}:${ref.variableName ?? '_'}`;
-      dataFlowEdges += 1;
-      this.addEdge(edges, uniqueEdgeIds, {
-        id: edgeId,
-        source: ref.sourceNodeId,
-        target: ref.targetNodeId,
-        type: 'dataflow',
-        layer: 'dataflow',
-        metadata: {
-          confidence: 0.58,
-          provenance: 'ast',
-          reason: ref.reason,
-          variable: ref.variableName
-        }
-      });
     }
 
     for (const record of dependencyRecords) {
@@ -316,9 +248,7 @@ export class PythonRelationResolver {
         unresolvedCalls,
         ambiguousCalls,
         classUsageEdges,
-        dataFlowEdges,
-        indexedClasses: classSymbols.length,
-        indexedVariables: variableSymbols.length
+        indexedClasses: classSymbols.length
       }
     };
   }

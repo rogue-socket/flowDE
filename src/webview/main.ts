@@ -4,9 +4,9 @@ declare function acquireVsCodeApi(): {
   postMessage: (message: unknown) => void;
 };
 
-type GraphLayer = 'structural' | 'dependency' | 'dataflow' | 'execution';
-type GraphNodeType = 'function' | 'variable' | 'module' | 'class';
-type GraphEdgeType = 'call' | 'dependency' | 'contains' | 'class-usage' | 'dataflow' | 'execution-path';
+type GraphLayer = 'structural' | 'dependency';
+type GraphNodeType = 'function' | 'module' | 'class';
+type GraphEdgeType = 'call' | 'dependency' | 'contains' | 'class-usage';
 
 interface GraphNode {
   id: string;
@@ -76,6 +76,7 @@ let latestGraphData: GraphData | undefined;
 let currentLayoutMode: LayoutMode = 'vertical';
 let selectedFlowId: string | undefined;
 let selectedNodeId: string | undefined;
+let selectedEdgeId: string | undefined;
 let flows: FlowDefinition[] = [];
 
 const nodeCatalog = new Map<string, GraphNode>();
@@ -106,6 +107,15 @@ moduleFilter.addEventListener('change', () => {
 });
 
 openSourceButton.addEventListener('click', () => {
+  if (selectedEdgeId) {
+    const edge = edgeCatalog.get(selectedEdgeId);
+    const sourceNode = edge ? nodeCatalog.get(edge.source) : undefined;
+    if (edge && sourceNode && sourceNode.filePath && typeof edge.metadata?.line === 'number') {
+      vscode.postMessage({ type: 'navigateToEdge', edgeId: edge.id, filePath: sourceNode.filePath, line: edge.metadata.line });
+      return;
+    }
+  }
+
   if (!selectedNodeId) {
     return;
   }
@@ -260,10 +270,35 @@ function renderGraph(graphData: GraphData): void {
         }
       },
       {
+        selector: '.is-focus-node',
+        style: {
+          opacity: 1,
+          'border-color': '#06b6d4',
+          'border-width': 2
+        }
+      },
+      {
+        selector: '.is-focus-edge',
+        style: {
+          opacity: 1,
+          width: 3,
+          'line-color': '#0891b2',
+          'target-arrow-color': '#0891b2'
+        }
+      },
+      {
         selector: '.is-selected-node',
         style: {
           'border-color': '#ef4444',
           'border-width': 3
+        }
+      },
+      {
+        selector: '.is-selected-edge',
+        style: {
+          'line-color': '#ef4444',
+          'target-arrow-color': '#ef4444',
+          width: 4
         }
       }
     ],
@@ -272,8 +307,29 @@ function renderGraph(graphData: GraphData): void {
 
   cy.on('tap', 'node', (event) => {
     const nodeId = event.target.id();
-    selectedNodeId = nodeId;
-    updateNodeInspector(nodeId);
+    if (selectedNodeId === nodeId) {
+      // Tapping the same node again exits focus mode
+      selectedNodeId = undefined;
+      updateNodeInspector(undefined);
+    } else {
+      selectedNodeId = nodeId;
+      selectedEdgeId = undefined;
+      updateNodeInspector(nodeId);
+    }
+    updateOpenSourceButtonState();
+    applyFlowHighlight();
+  });
+
+  cy.on('tap', 'edge', (event) => {
+    const edgeId = event.target.id();
+    if (selectedEdgeId === edgeId) {
+      selectedEdgeId = undefined;
+      updateNodeInspector(undefined);
+    } else {
+      selectedEdgeId = edgeId;
+      selectedNodeId = undefined;
+      updateEdgeInspector(edgeId);
+    }
     updateOpenSourceButtonState();
     applyFlowHighlight();
   });
@@ -284,6 +340,7 @@ function renderGraph(graphData: GraphData): void {
     }
 
     selectedNodeId = undefined;
+    selectedEdgeId = undefined;
     updateNodeInspector(undefined);
     updateOpenSourceButtonState();
     applyFlowHighlight();
@@ -324,7 +381,7 @@ function createLayoutOptions(layoutMode: LayoutMode): cytoscape.LayoutOptions {
 }
 
 function buildCytoscapeElements(graphData: GraphData): cytoscape.ElementDefinition[] {
-  const nodes = graphData.nodes.filter((node) => node.type !== 'variable');
+  const nodes = graphData.nodes;
   const nodeIds = new Set(nodes.map((node) => node.id));
 
   const preferredEdges = graphData.edges.filter(
@@ -397,7 +454,7 @@ function recomputeFlows(): void {
 }
 
 function extractTopToBottomFlows(graphData: GraphData, maxDepth: number, moduleId: string): FlowDefinition[] {
-  const baseNodes = graphData.nodes.filter((node) => node.type !== 'variable');
+  const baseNodes = graphData.nodes;
   const baseNodeIds = new Set(baseNodes.map((node) => node.id));
   const baseEdges = resolveFlowEdges(graphData.edges, baseNodeIds);
 
@@ -580,6 +637,7 @@ function renderFlowSteps(flow: FlowDefinition | undefined): void {
 
     button.addEventListener('click', () => {
       selectedNodeId = nodeId;
+      selectedEdgeId = undefined;
       updateNodeInspector(nodeId);
       updateOpenSourceButtonState();
       applyFlowHighlight();
@@ -609,9 +667,50 @@ function applyFlowHighlight(): void {
   const flowEdgeIds = new Set(selectedFlow?.edgeIds ?? []);
 
   cyInstance.batch(() => {
-    cyInstance.elements().removeClass('is-dim is-flow-node is-flow-edge is-selected-node');
+    cyInstance.elements().removeClass('is-dim is-flow-node is-flow-edge is-selected-node is-selected-edge is-focus-node is-focus-edge');
 
-    if (selectedFlow) {
+    const hasSelectedNode = !!selectedNodeId;
+    const hasSelectedEdge = !!selectedEdgeId;
+    const hasSelectedFlow = !!selectedFlow;
+
+    if (hasSelectedNode && selectedNodeId) {
+      // Focus Mode: Highlight neighborhood
+      const focusElement = cyInstance.getElementById(selectedNodeId);
+      if (focusElement.nonempty()) {
+        const incomers = focusElement.incomers();
+        const outgoers = focusElement.outgoers();
+        const neighborhood = focusElement.union(incomers).union(outgoers);
+
+        cyInstance.elements().forEach((ele) => {
+          if (neighborhood.has(ele)) {
+            if (ele.isNode()) ele.addClass('is-focus-node');
+            if (ele.isEdge()) ele.addClass('is-focus-edge');
+          } else {
+            ele.addClass('is-dim');
+          }
+        });
+
+        focusElement.addClass('is-selected-node');
+      }
+    } else if (hasSelectedEdge && selectedEdgeId) {
+      const selectedElement = cyInstance.getElementById(selectedEdgeId);
+      if (selectedElement.nonempty()) {
+        const sourceNode = cyInstance.getElementById(selectedElement.data('source'));
+        const targetNode = cyInstance.getElementById(selectedElement.data('target'));
+        const edgeNeighborhood = selectedElement.union(sourceNode).union(targetNode);
+
+        cyInstance.elements().forEach((ele) => {
+          if (edgeNeighborhood.has(ele)) {
+            if (ele.isNode()) ele.addClass('is-focus-node');
+            if (ele.isEdge()) ele.addClass('is-focus-edge');
+          } else {
+            ele.addClass('is-dim');
+          }
+        });
+
+        selectedElement.addClass('is-selected-edge');
+      }
+    } else if (hasSelectedFlow) {
       cyInstance.nodes().forEach((node) => {
         if (flowNodeIds.has(node.id())) {
           node.addClass('is-flow-node');
@@ -628,14 +727,35 @@ function applyFlowHighlight(): void {
         }
       });
     }
-
-    if (selectedNodeId) {
-      const selectedElement = cyInstance.getElementById(selectedNodeId);
-      if (selectedElement.nonempty()) {
-        selectedElement.addClass('is-selected-node');
-      }
-    }
   });
+}
+
+function updateEdgeInspector(edgeId: string | undefined): void {
+  if (!edgeId) {
+    nodeInspector.textContent = 'Select a node or edge to inspect';
+    return;
+  }
+
+  const edge = edgeCatalog.get(edgeId);
+  if (!edge) {
+    nodeInspector.textContent = 'Edge is no longer available in the current graph';
+    return;
+  }
+
+  const sourceNode = nodeCatalog.get(edge.source);
+  const targetNode = nodeCatalog.get(edge.target);
+
+  const location = sourceNode?.filePath && typeof edge.metadata?.line === 'number' 
+    ? `${sourceNode.filePath}:${edge.metadata.line}` 
+    : 'N/A';
+
+  nodeInspector.textContent = [
+    `Type: ${edge.type}`,
+    `Source: ${sourceNode?.name ?? edge.source}`,
+    `Target: ${targetNode?.name ?? edge.target}`,
+    `Location: ${location}`,
+    `Reason: ${edge.metadata?.reason ?? 'N/A'}`
+  ].join('\n');
 }
 
 function updateNodeInspector(nodeId: string | undefined): void {
@@ -650,29 +770,45 @@ function updateNodeInspector(nodeId: string | undefined): void {
     return;
   }
 
-  let incoming = 0;
-  let outgoing = 0;
+  const calledBy: string[] = [];
+  const calls: string[] = [];
 
   for (const edge of edgeCatalog.values()) {
     if (edge.target === node.id) {
-      incoming += 1;
+      const sourceNode = nodeCatalog.get(edge.source);
+      if (sourceNode) calledBy.push(sourceNode.name);
     }
     if (edge.source === node.id) {
-      outgoing += 1;
+      const targetNode = nodeCatalog.get(edge.target);
+      if (targetNode) calls.push(targetNode.name);
     }
   }
 
   const location = node.filePath && typeof node.line === 'number' ? `${node.filePath}:${node.line}` : 'N/A';
-  nodeInspector.textContent = [
+
+  const lines: string[] = [
     `Name: ${node.name}`,
     `Type: ${node.type}`,
-    `Incoming edges: ${incoming}`,
-    `Outgoing edges: ${outgoing}`,
-    `Location: ${location}`
-  ].join('\n');
+    `Location: ${location}`,
+    '',
+    `← Called by (${calledBy.length}):`,
+    ...( calledBy.length > 0 ? calledBy.map((n) => `   ${n}`) : ['   (none)']),
+    '',
+    `→ Calls (${calls.length}):`,
+    ...( calls.length > 0 ? calls.map((n) => `   ${n}`) : ['   (none)'])
+  ];
+
+  nodeInspector.textContent = lines.join('\n');
 }
 
 function updateOpenSourceButtonState(): void {
+  if (selectedEdgeId) {
+    const edge = edgeCatalog.get(selectedEdgeId);
+    const sourceNode = edge ? nodeCatalog.get(edge.source) : undefined;
+    openSourceButton.disabled = !edge || !sourceNode || !sourceNode.filePath || typeof edge.metadata?.line !== 'number';
+    return;
+  }
+
   if (!selectedNodeId) {
     openSourceButton.disabled = true;
     return;

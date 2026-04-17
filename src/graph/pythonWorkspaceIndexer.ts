@@ -6,10 +6,8 @@ import {
   IndexedClassSymbol,
   ImportBinding,
   IndexedCallReference,
-  IndexedDataFlowReference,
   IndexedFunctionSymbol,
   IndexedModule,
-  IndexedVariableSymbol,
   IndexingResult
 } from './semanticTypes';
 import { WorkspaceGraphCache } from './workspaceGraphCache';
@@ -18,41 +16,6 @@ import { WorkspaceGraphCache } from './workspaceGraphCache';
  * Glob used to skip noisy or generated folders while indexing Python sources.
  */
 const PYTHON_EXCLUDE_GLOB = '**/{.git,node_modules,.venv,venv,__pycache__,dist}/**';
-const PYTHON_IDENTIFIERS_TO_SKIP = new Set([
-  'and',
-  'as',
-  'assert',
-  'break',
-  'class',
-  'continue',
-  'def',
-  'del',
-  'elif',
-  'else',
-  'except',
-  'false',
-  'finally',
-  'for',
-  'from',
-  'global',
-  'if',
-  'import',
-  'in',
-  'is',
-  'lambda',
-  'none',
-  'nonlocal',
-  'not',
-  'or',
-  'pass',
-  'raise',
-  'return',
-  'true',
-  'try',
-  'while',
-  'with',
-  'yield'
-]);
 
 /**
  * Scans workspace Python files and extracts symbols and references for graph building.
@@ -134,7 +97,7 @@ export class PythonWorkspaceIndexer {
       id: moduleNodeId,
       type: 'module',
       name: moduleName,
-      layers: ['structural', 'dependency', 'dataflow'],
+      layers: ['structural', 'dependency'],
       roles: ['container'],
       filePath: relativePath,
       line: 1
@@ -149,9 +112,7 @@ export class PythonWorkspaceIndexer {
       moduleNode,
       classes: parseArtifacts.classes,
       functions: parseArtifacts.functions,
-      variables: parseArtifacts.variables,
       callRefs: parseArtifacts.callRefs,
-      dataFlowRefs: parseArtifacts.dataFlowRefs,
       dependencies: importArtifacts.dependencies,
       importBindings: importArtifacts.importBindings,
       warning: parseArtifacts.warning
@@ -170,16 +131,14 @@ export class PythonWorkspaceIndexer {
         id: `module:${relativePath}`,
         type: 'module',
         name: moduleName,
-        layers: ['structural', 'dependency', 'dataflow'],
+        layers: ['structural', 'dependency'],
         roles: ['container'],
         filePath: relativePath,
         line: 1
       },
       classes: [],
       functions: [],
-      variables: [],
       callRefs: [],
-      dataFlowRefs: [],
       dependencies: [],
       importBindings: []
     };
@@ -196,43 +155,12 @@ export class PythonWorkspaceIndexer {
   ): {
     classes: IndexedClassSymbol[];
     functions: IndexedFunctionSymbol[];
-    variables: IndexedVariableSymbol[];
     callRefs: IndexedCallReference[];
-    dataFlowRefs: IndexedDataFlowReference[];
     warning?: string;
   } {
     const classes: IndexedClassSymbol[] = [];
     const functions: IndexedFunctionSymbol[] = [];
-    const variables: IndexedVariableSymbol[] = [];
     const callRefs: IndexedCallReference[] = [];
-    const dataFlowRefs: IndexedDataFlowReference[] = [];
-    const variableByScopeAndName = new Map<string, IndexedVariableSymbol>();
-
-    const ensureScopedVariable = (
-      name: string,
-      line: number,
-      functionNodeId?: string
-    ): IndexedVariableSymbol => {
-      const scopeKey = `${functionNodeId ?? moduleNodeId}::${name}`;
-      const existing = variableByScopeAndName.get(scopeKey);
-      if (existing) {
-        return existing;
-      }
-
-      const symbol: IndexedVariableSymbol = {
-        id: `variable:${relativePath}:${functionNodeId ?? 'module'}:${name}`,
-        name,
-        filePath: relativePath,
-        line,
-        moduleNodeId,
-        moduleName,
-        functionNodeId
-      };
-
-      variableByScopeAndName.set(scopeKey, symbol);
-      variables.push(symbol);
-      return symbol;
-    };
 
     try {
       const tree = parser.parse(source);
@@ -284,78 +212,20 @@ export class PythonWorkspaceIndexer {
             });
 
             currentFunctionId = functionId;
-
-            for (const parameterName of this.extractFunctionParameterNames(node, source)) {
-              const parameterVar = ensureScopedVariable(parameterName, line, functionId);
-              dataFlowRefs.push({
-                sourceNodeId: parameterVar.id,
-                targetNodeId: functionId,
-                variableName: parameterName,
-                reason: 'function-parameter'
-              });
-            }
           }
         }
 
         if (node.type.name === 'CallExpression' && currentFunctionId) {
           const calleePath = this.extractCalleePath(node, source);
           if (calleePath && calleePath.length > 0) {
+            const line = this.positionToLine(lineMap, node.from);
             callRefs.push({
               sourceFunctionId: currentFunctionId,
               sourceModuleId: moduleNodeId,
               sourceModuleName: moduleName,
               calleeName: calleePath[calleePath.length - 1],
-              calleePath
-            });
-          }
-        }
-
-        const isAssignmentNode = /Assign|Assignment/.test(node.type.name);
-        if (isAssignmentNode && currentFunctionId) {
-          const assignmentText = source.slice(node.from, node.to);
-          const parsedAssignment = this.extractAssignmentExpression(assignmentText);
-
-          if (parsedAssignment) {
-            const line = this.positionToLine(lineMap, node.from);
-            const sourceVariables = this.extractIdentifierNames(parsedAssignment.right)
-              .map((name) => ensureScopedVariable(name, line, currentFunctionId));
-
-            for (const targetName of parsedAssignment.left) {
-              const targetVariable = ensureScopedVariable(targetName, line, currentFunctionId);
-
-              if (sourceVariables.length === 0) {
-                dataFlowRefs.push({
-                  sourceNodeId: currentFunctionId,
-                  targetNodeId: targetVariable.id,
-                  variableName: targetName,
-                  reason: 'literal-assignment'
-                });
-                continue;
-              }
-
-              for (const sourceVariable of sourceVariables) {
-                dataFlowRefs.push({
-                  sourceNodeId: sourceVariable.id,
-                  targetNodeId: targetVariable.id,
-                  variableName: targetName,
-                  reason: 'assignment'
-                });
-              }
-            }
-          }
-        }
-
-        if (node.type.name === 'ReturnStatement' && currentFunctionId) {
-          const returnText = source.slice(node.from, node.to).replace(/^\s*return\s+/, '');
-          const line = this.positionToLine(lineMap, node.from);
-
-          for (const identifier of this.extractIdentifierNames(returnText)) {
-            const sourceVariable = ensureScopedVariable(identifier, line, currentFunctionId);
-            dataFlowRefs.push({
-              sourceNodeId: sourceVariable.id,
-              targetNodeId: currentFunctionId,
-              variableName: identifier,
-              reason: 'return-flow'
+              calleePath,
+              line
             });
           }
         }
@@ -367,91 +237,19 @@ export class PythonWorkspaceIndexer {
 
       walk(tree.topNode);
 
-      return { classes, functions, variables, callRefs, dataFlowRefs };
+      return { classes, functions, callRefs };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         classes,
         functions,
-        variables,
         callRefs,
-        dataFlowRefs,
         warning: `Parser fallback on ${relativePath}: ${errorMessage}`
       };
     }
   }
 
-  /**
-   * Extracts normalized parameter names from a function parameter list.
-   */
-  private extractFunctionParameterNames(node: SyntaxNode, source: string): string[] {
-    const paramListNode = this.findFirstChildByType(node, 'ParamList');
-    if (!paramListNode) {
-      return [];
-    }
 
-    const rawParamText = source.slice(paramListNode.from, paramListNode.to).trim();
-    const body = rawParamText.startsWith('(') && rawParamText.endsWith(')')
-      ? rawParamText.slice(1, -1)
-      : rawParamText;
-
-    return body
-      .split(',')
-      .map((segment) => segment.trim())
-      .filter((segment) => segment.length > 0)
-      .map((segment) => {
-        const withoutDefault = segment.split('=')[0]?.trim() ?? segment;
-        const withoutAnnotation = withoutDefault.split(':')[0]?.trim() ?? withoutDefault;
-        return withoutAnnotation.replace(/^\*+/, '').trim();
-      })
-      .filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
-      .filter((name) => !PYTHON_IDENTIFIERS_TO_SKIP.has(name.toLowerCase()));
-  }
-
-  /**
-   * Parses a simple assignment expression into target and source components.
-   */
-  private extractAssignmentExpression(
-    statement: string
-  ): { left: string[]; right: string } | undefined {
-    const match = statement.match(/^\s*([A-Za-z_][A-Za-z0-9_\s,]*)\s*=\s*(.+)$/s);
-    if (!match) {
-      return undefined;
-    }
-
-    const left = match[1]
-      .split(',')
-      .map((segment) => segment.trim())
-      .filter((segment) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(segment));
-
-    if (left.length === 0) {
-      return undefined;
-    }
-
-    return {
-      left,
-      right: match[2].trim()
-    };
-  }
-
-  /**
-   * Extracts unique identifier tokens from an expression while skipping keywords.
-   */
-  private extractIdentifierNames(expression: string): string[] {
-    const matches = expression.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
-    const unique = new Set<string>();
-
-    for (const match of matches) {
-      const lowered = match.toLowerCase();
-      if (PYTHON_IDENTIFIERS_TO_SKIP.has(lowered)) {
-        continue;
-      }
-
-      unique.add(match);
-    }
-
-    return [...unique];
-  }
 
   /**
    * Parses import statements into dependency and import-binding artifacts.
