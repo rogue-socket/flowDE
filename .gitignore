@@ -3,10 +3,15 @@ dist/
 media/webview.js
 media/webview.js.map
 .vscode-test/
+.vscode-test-web/
 coverage/
+.nyc_output/
 *.vsix
+*.tgz
+*.tsbuildinfo
 .DS_Store
 *.log
+.eslintcache
 .env
 .env.*
 user.env
