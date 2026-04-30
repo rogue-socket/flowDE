@@ -5,8 +5,8 @@ declare function acquireVsCodeApi(): {
 };
 
 type GraphLayer = 'structural' | 'dependency';
-type GraphNodeType = 'function' | 'module' | 'class';
-type GraphEdgeType = 'call' | 'dependency' | 'contains' | 'class-usage';
+type GraphNodeType = 'function' | 'variable' | 'module' | 'class';
+type GraphEdgeType = 'call' | 'dependency' | 'contains' | 'class-usage' | 'dataflow' | 'execution-path';
 
 interface GraphNode {
   id: string;
@@ -381,14 +381,24 @@ function createLayoutOptions(layoutMode: LayoutMode): cytoscape.LayoutOptions {
 }
 
 function buildCytoscapeElements(graphData: GraphData): cytoscape.ElementDefinition[] {
-  const nodes = graphData.nodes;
+  const nodes = graphData.nodes.filter((node) => node.type !== 'variable');
   const nodeIds = new Set(nodes.map((node) => node.id));
 
-  const preferredEdges = graphData.edges.filter(
-    (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target) && (edge.type === 'call' || edge.type === 'dependency')
+  const connectedEdges = graphData.edges.filter(
+    (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)
   );
-  const fallbackEdges = graphData.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
-  const edges = preferredEdges.length > 0 ? preferredEdges : fallbackEdges;
+
+  const preferred = connectedEdges.filter(
+    (edge) => edge.type === 'call' || edge.type === 'dependency'
+  );
+
+  let edges: GraphEdge[];
+  if (preferred.length > 0) {
+    edges = preferred;
+  } else {
+    const fallback = connectedEdges.filter((edge) => edge.type !== 'contains');
+    edges = fallback.length > 0 ? fallback : connectedEdges;
+  }
 
   const nodeElements = nodes.map<cytoscape.ElementDefinition>((node) => ({
     data: {

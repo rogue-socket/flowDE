@@ -3,8 +3,10 @@ import {
   ImportBinding,
   IndexedCallReference,
   IndexedClassSymbol,
+  IndexedDataFlowReference,
   IndexedFunctionSymbol,
   IndexedModule,
+  IndexedVariableSymbol,
   ResolutionResult
 } from './semanticTypes';
 
@@ -44,7 +46,9 @@ export class PythonRelationResolver {
 
     const classSymbols: IndexedClassSymbol[] = [];
     const functionSymbols: IndexedFunctionSymbol[] = [];
+    const variableSymbols: IndexedVariableSymbol[] = [];
     const callRefs: IndexedCallReference[] = [];
+    const dataFlowRefs: IndexedDataFlowReference[] = [];
 
     for (const module of modules) {
       nodes.push(module.moduleNode);
@@ -58,7 +62,9 @@ export class PythonRelationResolver {
 
       classSymbols.push(...module.classes);
       functionSymbols.push(...module.functions);
+      variableSymbols.push(...module.variables);
       callRefs.push(...module.callRefs);
+      dataFlowRefs.push(...module.dataFlowRefs);
     }
 
     nodes.push(
@@ -146,6 +152,57 @@ export class PythonRelationResolver {
             : 'Function is declared in module.'
         }
       });
+    }
+
+    nodes.push(
+      ...variableSymbols.map((symbol) => ({
+        id: symbol.id,
+        type: 'variable' as const,
+        name: symbol.name,
+        layers: ['structural', 'dependency'] as GraphNode['layers'],
+        roles: [] as GraphNode['roles'],
+        filePath: symbol.filePath,
+        line: symbol.line,
+        moduleName: symbol.moduleName,
+        metadata: {
+          moduleNodeId: symbol.moduleNodeId
+        }
+      }))
+    );
+
+    for (const symbol of variableSymbols) {
+      const parentNodeId = symbol.functionId ?? symbol.moduleNodeId;
+      this.addEdge(edges, uniqueEdgeIds, {
+        id: `edge:contains:${parentNodeId}->${symbol.id}`,
+        source: parentNodeId,
+        target: symbol.id,
+        type: 'contains',
+        layer: 'structural',
+        metadata: {
+          confidence: 1,
+          provenance: 'containment',
+          reason: 'Variable is assigned in scope.'
+        }
+      });
+    }
+
+    for (const ref of dataFlowRefs) {
+      const candidates = functionSymbolsByName.get(ref.calleeName);
+      if (candidates && candidates.length === 1) {
+        this.addEdge(edges, uniqueEdgeIds, {
+          id: `edge:dataflow:${candidates[0].id}->${ref.variableId}`,
+          source: candidates[0].id,
+          target: ref.variableId,
+          type: 'dataflow',
+          layer: 'dependency',
+          metadata: {
+            confidence: 0.7,
+            provenance: 'heuristic',
+            reason: `Return value of ${ref.calleeName} flows into variable.`,
+            line: ref.line
+          }
+        });
+      }
     }
 
     let resolvedCalls = 0;

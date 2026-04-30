@@ -2,7 +2,7 @@
  * Shared graph contracts exchanged between extension host and webview.
  */
 export type GraphLayer = 'structural' | 'dependency';
-export type GraphNodeType = 'function' | 'module' | 'class';
+export type GraphNodeType = 'function' | 'variable' | 'module' | 'class';
 export type GraphNodeRole =
   | 'container'
   | 'callable'
@@ -12,7 +12,9 @@ export type GraphEdgeType =
   | 'call'
   | 'dependency'
   | 'contains'
-  | 'class-usage';
+  | 'class-usage'
+  | 'dataflow'
+  | 'execution-path';
 export type GraphEdgeProvenance = 'containment' | 'ast' | 'import-map' | 'heuristic';
 
 /**

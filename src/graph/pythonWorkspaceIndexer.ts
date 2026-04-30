@@ -4,6 +4,8 @@ import { SyntaxNode } from '@lezer/common';
 import { GraphNode } from './schema';
 import {
   IndexedClassSymbol,
+  IndexedDataFlowReference,
+  IndexedVariableSymbol,
   ImportBinding,
   IndexedCallReference,
   IndexedFunctionSymbol,
@@ -112,7 +114,9 @@ export class PythonWorkspaceIndexer {
       moduleNode,
       classes: parseArtifacts.classes,
       functions: parseArtifacts.functions,
+      variables: parseArtifacts.variables,
       callRefs: parseArtifacts.callRefs,
+      dataFlowRefs: parseArtifacts.dataFlowRefs,
       dependencies: importArtifacts.dependencies,
       importBindings: importArtifacts.importBindings,
       warning: parseArtifacts.warning
@@ -138,7 +142,9 @@ export class PythonWorkspaceIndexer {
       },
       classes: [],
       functions: [],
+      variables: [],
       callRefs: [],
+      dataFlowRefs: [],
       dependencies: [],
       importBindings: []
     };
@@ -155,12 +161,16 @@ export class PythonWorkspaceIndexer {
   ): {
     classes: IndexedClassSymbol[];
     functions: IndexedFunctionSymbol[];
+    variables: IndexedVariableSymbol[];
     callRefs: IndexedCallReference[];
+    dataFlowRefs: IndexedDataFlowReference[];
     warning?: string;
   } {
     const classes: IndexedClassSymbol[] = [];
     const functions: IndexedFunctionSymbol[] = [];
+    const variables: IndexedVariableSymbol[] = [];
     const callRefs: IndexedCallReference[] = [];
+    const dataFlowRefs: IndexedDataFlowReference[] = [];
 
     try {
       const tree = parser.parse(source);
@@ -215,12 +225,60 @@ export class PythonWorkspaceIndexer {
           }
         }
 
-        if (node.type.name === 'CallExpression' && currentFunctionId) {
+        if (node.type.name === 'AssignStatement') {
+          const lhsNode = this.findFirstChildByType(node, 'VariableName');
+          if (lhsNode) {
+            const varName = source.slice(lhsNode.from, lhsNode.to);
+            const line = this.positionToLine(lineMap, lhsNode.from);
+            const varId = `variable:${relativePath}:${varName}:${line}`;
+
+            if (!currentFunctionId) {
+              variables.push({
+                id: varId,
+                name: varName,
+                filePath: relativePath,
+                line,
+                moduleNodeId,
+                moduleName
+              });
+            } else {
+              variables.push({
+                id: varId,
+                name: varName,
+                filePath: relativePath,
+                line,
+                moduleNodeId,
+                moduleName,
+                functionId: currentFunctionId
+              });
+            }
+
+            const callExpr = this.findDescendantByType(node, 'CallExpression');
+            if (callExpr) {
+              const calleePath = this.extractCalleePath(callExpr, source);
+              if (calleePath && calleePath.length > 0) {
+                dataFlowRefs.push({
+                  variableId: varId,
+                  calleeName: calleePath[calleePath.length - 1],
+                  calleePath,
+                  kind: 'assignment',
+                  line,
+                  sourceFunctionId: currentFunctionId,
+                  moduleNodeId,
+                  moduleName
+                });
+              }
+            }
+          }
+        }
+
+        if (node.type.name === 'CallExpression') {
+          const effectiveSourceId = currentFunctionId ?? moduleNodeId;
           const calleePath = this.extractCalleePath(node, source);
           if (calleePath && calleePath.length > 0) {
             const line = this.positionToLine(lineMap, node.from);
             callRefs.push({
-              sourceFunctionId: currentFunctionId,
+              sourceFunctionId: effectiveSourceId,
               sourceModuleId: moduleNodeId,
               sourceModuleName: moduleName,
               calleeName: calleePath[calleePath.length - 1],
@@ -237,13 +295,15 @@ export class PythonWorkspaceIndexer {
 
       walk(tree.topNode);
 
-      return { classes, functions, callRefs };
+      return { classes, functions, variables, callRefs, dataFlowRefs };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         classes,
         functions,
+        variables,
         callRefs,
+        dataFlowRefs,
         warning: `Parser fallback on ${relativePath}: ${errorMessage}`
       };
     }
@@ -329,6 +389,24 @@ export class PythonWorkspaceIndexer {
     for (let child = node.firstChild; child; child = child.nextSibling) {
       if (child.type.name === typeName) {
         return child;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Finds the first descendant node of a given syntax type via depth-first search.
+   */
+  private findDescendantByType(node: SyntaxNode, typeName: string): SyntaxNode | undefined {
+    for (let child = node.firstChild; child; child = child.nextSibling) {
+      if (child.type.name === typeName) {
+        return child;
+      }
+
+      const found = this.findDescendantByType(child, typeName);
+      if (found) {
+        return found;
       }
     }
 

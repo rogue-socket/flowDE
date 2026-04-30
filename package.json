@@ -3,7 +3,7 @@
   "displayName": "FlowDE",
   "description": "Graph-based code comprehension layer for Python projects in VS Code.",
   "icon": "media/icon.png",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "rogue-socket",
   "license": "MIT",
   "repository": {
@@ -33,6 +33,8 @@
     "graph",
     "code navigation",
     "program analysis",
+    "static analysis",
+    "data-flow",
     "visualization"
   ],
   "main": "./dist/extension.js",

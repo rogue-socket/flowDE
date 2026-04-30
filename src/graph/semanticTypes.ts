@@ -39,6 +39,33 @@ export interface IndexedCallReference {
 }
 
 /**
+ * Symbol discovered from a variable assignment.
+ */
+export interface IndexedVariableSymbol {
+  id: string;
+  name: string;
+  filePath: string;
+  line: number;
+  moduleNodeId: string;
+  moduleName: string;
+  functionId?: string;
+}
+
+/**
+ * Data-flow reference linking a variable assignment to its source call expression.
+ */
+export interface IndexedDataFlowReference {
+  variableId: string;
+  calleeName: string;
+  calleePath: string[];
+  kind: 'assignment' | 'parameter' | 'return';
+  line: number;
+  sourceFunctionId?: string;
+  moduleNodeId: string;
+  moduleName: string;
+}
+
+/**
  * Import alias mapping used for relation disambiguation.
  */
 export interface ImportBinding {
@@ -58,6 +85,8 @@ export interface IndexedModule {
   classes: IndexedClassSymbol[];
   functions: IndexedFunctionSymbol[];
   callRefs: IndexedCallReference[];
+  variables: IndexedVariableSymbol[];
+  dataFlowRefs: IndexedDataFlowReference[];
   dependencies: string[];
   importBindings: ImportBinding[];
   warning?: string;
